@@ -36,6 +36,12 @@ for name in "${GENERATED[@]}"; do
   fi
 done
 
+if [[ -z $(env_get OOJAM_IDENTITY_PRIVATE_KEY) ]]; then
+  env_set OOJAM_IDENTITY_PRIVATE_KEY "$(openssl genpkey -algorithm ed25519 | base64 -w0)"
+  log "generated OOJAM_IDENTITY_PRIVATE_KEY; its public key (commit it to the site, see bin/identity-pubkey):"
+  env_get OOJAM_IDENTITY_PRIVATE_KEY | base64 -d | openssl pkey -pubout >&2
+fi
+
 for name in "${DB_PASSWORDS[@]}"; do
   [[ $(env_get "$name") =~ ^[A-Za-z0-9._~-]{16,}$ ]] \
     || die "$name must be at least 16 URL-safe characters (A-Z a-z 0-9 . _ ~ -): it goes into postgres:// URLs"

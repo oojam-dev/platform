@@ -73,7 +73,11 @@ oojam takes **no payments**: it's a bit of fun, not a business.
 
 ### 2.3 The daily cycle (00:00 UTC)
 
-1. **Freeze.** The top `open` idea becomes `frozen` and its votes are locked.
+1. **Freeze.** The top `open` idea becomes `frozen` and its votes are locked. If there's no
+   eligible idea, it's a **housekeeping day**: the builder makes one small, safe improvement (a
+   bug, accessibility, phone layout, performance or tests; no new features and nothing removed)
+   through the same gates and budget. It's credited to `@oojam-dev` and shown as "Housekeeping" in
+   the changelog (`ideaId: null`).
 2. **Budget check.** The build budget is what's left of today's `DAILY_BUDGET_USD` ($10), minus a
    50¢ screening reserve. If that's below `BUILD_BUDGET_MIN_USD` ($3), the day is `skipped`, the idea
    goes back to `open`, and the board shows why.
@@ -289,7 +293,8 @@ The report is Markdown, posted in the PR and stored in `builds.gate_report`.
 
 The builder may not create, modify, delete or rename any of these:
 `.github/**`, `LICENSE`, `CLAUDE.md`, `Dockerfile`, `.dockerignore`, `.npmrc`, `.nvmrc`,
-`.oojam/**`, `scripts/migrate.mjs`, `app/routes/_health.ts`, `content/builds.json`,
+`.oojam/**`, `scripts/migrate.mjs`, `app/routes/_health.ts`, `app/lib/oojam-identity.server.ts`,
+`app/routes/_oojam.callback.ts`, `app/routes/_oojam.signout.ts`, `content/builds.json`,
 `.claude/**`, `.mcp.json`, `.gitattributes`, `.gitmodules`, `.git/**`, and **existing** files
 under `drizzle/*.sql` and `drizzle/meta/*_snapshot.json`.
 
@@ -471,6 +476,25 @@ banner. The board's hero has a large live countdown to the next
 build. oojam.dev shows one too.
 
 ---
+
+### 6.7 Sign in with oojam (identity for oojam.dev)
+
+oojam.dev has no accounts, secrets or network access, so build.oojam.dev vouches for visitors.
+1. A "Sign in with GitHub" link on oojam.dev goes to `build.oojam.dev/connect?return=<path>`, which
+   signs the visitor in with GitHub if needed. Banned users are refused.
+2. The platform redirects to `oojam.dev/_oojam/callback?token=…&return=<path>`. The token is
+   `base64url(payload).base64url(Ed25519 signature)`. Its payload is
+   `{v:1, aud:"oojam.dev", sub:<github id>, login, iat, exp}`, valid for 7 days. It's signed with
+   `OOJAM_IDENTITY_PRIVATE_KEY`, which only the platform holds.
+3. The site checks it against the public key committed in `app/lib/oojam-identity.server.ts`, and
+   stores it as the `oojam_viewer` cookie (`HttpOnly; Secure; SameSite=Lax`). It's verified again
+   on every request by `getViewer()` and `requireViewer()`. `/_oojam/signout` clears it.
+4. The identity module, the two routes and the three managed lines in `app/routes.ts` are
+   protected (§5.1), so a build can't forge or bypass identity.
+
+Policy: anything visitors **upload** (images, audio, video or files) requires a signed-in viewer,
+stores their GitHub id and login, and shows "@login" publicly. Text submissions may stay
+anonymous.
 
 ## 7. Deployer (`src/worker/deployer.ts`)
 

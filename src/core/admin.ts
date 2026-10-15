@@ -53,7 +53,8 @@ export async function unbanUser(db: Database, actorId: number, userId: number, r
  */
 export type WorkerRequest =
   | { type: "run_cycle"; requestedAt: string; by: number }
-  | { type: "rollback"; deploymentId: number; requestedAt: string; by: number };
+  | { type: "rollback"; deploymentId: number; requestedAt: string; by: number }
+  | { type: "deploy_main"; requestedAt: string; by: number };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type WorkerRequestInput = DistributiveOmit<WorkerRequest, "requestedAt" | "by">;

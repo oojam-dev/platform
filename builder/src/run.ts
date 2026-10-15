@@ -58,6 +58,7 @@ const preToolUse: HookCallback = async (input) => {
 };
 
 export function buildPrompt(job: Job): string {
+  if (job.idea.id === 0) return housekeepingPrompt(job);
   const feedback = job.feedback
     ? `\n\nThis is attempt ${job.attempt}. Your previous attempt was rejected by oojam's guardrails. The work tree still holds that attempt. Fix every blocking finding below (or start over if that's simpler), then verify again:\n\n<gate-report>\n${job.feedback}\n</gate-report>`
     : "";
@@ -81,6 +82,28 @@ before you finish.${feedback}
 Finish with a short summary (what you built, where, anything notable) and a final line \
 \`ROUTES: /path, /other\` listing up to 5 pages that show the feature. If the idea can't be \
 built within the rules, reply with \`GAVE_UP: <reason>\` instead.`;
+}
+
+function feedbackBlock(job: Job): string {
+  return job.feedback
+    ? `\n\nThis is attempt ${job.attempt}. Your previous attempt was rejected by oojam's guardrails. The work tree still holds that attempt. Fix every blocking finding below (or start over if that's simpler), then verify again:\n\n<gate-report>\n${job.feedback}\n</gate-report>`
+    : "";
+}
+
+/** No idea was on the board today: one small, safe improvement (BUILDER.md › Housekeeping days). */
+export function housekeepingPrompt(job: Job): string {
+  return `It's a housekeeping day on oojam.dev: nobody posted an idea, so instead of building something new, \
+make ONE small, safe improvement to what's already in /workspace, following CLAUDE.md and the \
+"Housekeeping days" section of your guide.
+
+Look around first (the routes, the changelog in content/builds.json, existing tests), pick the most \
+worthwhile small fix, a bug, an accessibility or phone-layout problem, a performance win or missing \
+tests, and make it. No new features, nothing removed, no redesign, and keep the diff small. Verify \
+with \`npm run check && npm test && npm run build\` before you finish.${feedbackBlock(job)}
+
+Finish with a short summary whose first line says what you improved (it becomes the PR title), then \
+a final line \`ROUTES: /path\` with up to 5 pages that show it. If nothing is worth changing, reply \
+with \`GAVE_UP: nothing needs doing\` instead.`;
 }
 
 export function parseFinal(text: string): { status: "done" | "gave_up"; summary: string; routes: string[] } {

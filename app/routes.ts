@@ -20,6 +20,7 @@ export default [
   route("auth/github", "routes/auth.github.ts"),
   route("auth/github/callback", "routes/auth.github.callback.tsx"),
   route("auth/logout", "routes/auth.logout.ts"),
+  route("connect", "routes/connect.ts"),
   route("healthz", "routes/healthz.ts"),
   route("*", "routes/not-found.tsx"),
 ] satisfies RouteConfig;

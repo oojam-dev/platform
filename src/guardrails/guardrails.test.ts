@@ -106,12 +106,22 @@ describe("protected paths", () => {
     "scripts/migrate.mjs",
     "content/builds.json",
     "app/routes/_health.ts",
+    "app/lib/oojam-identity.server.ts",
+    "app/routes/_oojam.callback.ts",
     ".oojam/version",
     ".claude/settings.json",
     "app/.npmrc",
     "nested/.gitattributes",
   ])("blocks %s", (p) => {
     expect(blocks(checkPaths(set(file(p, "x", { status: "M" }))))).not.toHaveLength(0);
+  });
+
+  it("requires app/routes.ts to keep its managed lines", () => {
+    const managed = `export default [\n  index("routes/home.tsx"),\n  route("_health", "routes/_health.ts"),\n  route("_oojam/callback", "routes/_oojam.callback.ts"),\n  route("_oojam/signout", "routes/_oojam.signout.ts"),\n`;
+    expect(checkPaths(set(file("app/routes.ts", `${managed}  route("photos", "routes/photos.tsx"),\n];`, { status: "M" })))).toEqual([]);
+    const dropped = managed.replace('  route("_oojam/callback", "routes/_oojam.callback.ts"),\n', "");
+    expect(blocks(checkPaths(set(file("app/routes.ts", `${dropped}];`, { status: "M" }))))).toHaveLength(1);
+    expect(blocks(checkPaths(set(file("app/routes.ts", "", { status: "D" }))))).toHaveLength(3);
   });
 
   it("allows ordinary app files and new migrations", () => {

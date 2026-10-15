@@ -63,6 +63,12 @@ describe("final message", () => {
   it("parses giving up", () => {
     expect(parseFinal("Looked at it.\nGAVE_UP: needs outbound network").status).toBe("gave_up");
   });
+  it("writes a housekeeping prompt when there's no idea", () => {
+    const job = { buildId: 1, attempt: 1, model: "m", effort: "high" as const, budgetUsd: 1, idea: { id: 0, title: "Housekeeping", body: "", author: "oojam-dev" }, feedback: null };
+    expect(buildPrompt(job)).toContain("housekeeping day");
+    expect(buildPrompt(job)).not.toContain("<idea>");
+  });
+
   it("puts feedback in the prompt on retry", () => {
     const job = { buildId: 1, attempt: 2, model: "m", effort: "high" as const, budgetUsd: 1, idea: { id: 1, title: "T", body: "", author: "a" }, feedback: "- block: x" };
     expect(buildPrompt(job)).toContain("<gate-report>");

@@ -35,6 +35,9 @@ const PROTECTED_FILES = new Set([
   ".nvmrc",
   "scripts/migrate.mjs",
   "app/routes/_health.ts",
+  "app/lib/oojam-identity.server.ts",
+  "app/routes/_oojam.callback.ts",
+  "app/routes/_oojam.signout.ts",
   "content/builds.json",
   ".mcp.json",
 ]);

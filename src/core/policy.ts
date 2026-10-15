@@ -17,7 +17,7 @@ export const POLICY_RULES: { id: string; rule: string }[] = [
   },
   {
     id: "preserve",
-    rule: "No deleting or destructively changing data or features other ideas built. Restyling is fine; wiping a feature people paid for isn't.",
+    rule: "No deleting or destructively changing data or features other ideas built. Restyling is fine; wiping a feature people voted for isn't.",
   },
   {
     id: "size",
@@ -25,7 +25,7 @@ export const POLICY_RULES: { id: string; rule: string }[] = [
   },
   {
     id: "ugc",
-    rule: "Anything that publishes what visitors submit must escape it, limit its length, rate-limit by IP, and hide an item after 3 reports.",
+    rule: "Anything that publishes what visitors submit must escape it, limit its length, rate-limit it, and hide an item after 3 reports. Uploads (images, files) need the visitor signed in with GitHub, and show who posted them.",
   },
 ];
 
@@ -33,5 +33,5 @@ export const POLICY_TEXT = POLICY_RULES.map((r, i) => `${i + 1}. [${r.id}] ${r.r
 
 export const ABOUT_SITE = `oojam.dev is a website with no designated purpose. The community posts and votes on ideas, \
 and each day the top idea is built by an AI agent into the open-source site (React Router v7, Tailwind, \
-Drizzle + Postgres), merged automatically and deployed. The site has no user accounts, no internet access \
-at runtime, and a strict Content-Security-Policy (no third-party scripts, fonts, images or connections).`;
+Drizzle + Postgres), merged automatically and deployed. Visitors can sign in with GitHub through oojam, but there are no passwords or other accounts. \
+The site has no internet access at runtime, and a strict Content-Security-Policy (no third-party scripts, fonts, images or connections).`;

@@ -32,6 +32,33 @@ import { buildDirs, cleanupBuild, commitPlatformFile, freshCheckout, pushBranch,
 import { revertOnMain } from "./revert.js";
 
 type Build = typeof builds.$inferSelect;
+
+/** What a build works on: a community idea, or housekeeping on a day without one. */
+interface Task {
+  housekeeping: boolean;
+  idea: { id: number; title: string; body: string };
+  author: { login: string; githubId: number | null };
+}
+
+const HOUSEKEEPING: Task = {
+  housekeeping: true,
+  idea: {
+    id: 0,
+    title: "Housekeeping",
+    body: "No idea was on the board today. Make one small, safe improvement to what's already on oojam.dev: a bug fix, an accessibility or mobile-layout fix, a performance win, or missing tests. No new features, nothing removed, no redesign.",
+  },
+  author: { login: "oojam-dev", githubId: null },
+};
+
+async function loadTask(db: Database, b: Build): Promise<Task | undefined> {
+  if (b.ideaId === null) return HOUSEKEEPING;
+  const [row] = await db
+    .select({ idea: ideas, login: users.githubLogin, githubId: users.githubId })
+    .from(ideas)
+    .innerJoin(users, eq(users.id, ideas.authorId))
+    .where(eq(ideas.id, b.ideaId));
+  return row ? { housekeeping: false, idea: row.idea, author: { login: row.login, githubId: row.githubId } } : undefined;
+}
 const MAX_ATTEMPTS = 2;
 const MAX_PREBUILD_REJECTIONS = 3;
 const SCREENING_RESERVE_CENTS = 50;
@@ -115,11 +142,16 @@ export async function runCycle(db: Database, day = utcDay()): Promise<Build | un
 
 async function stepFreeze(db: Database, b: Build): Promise<Build> {
   const idea = await topOpenIdea(db, b.skippedIdeaIds);
-  if (!idea) return finish(db, b, "skipped", null, "No ideas on the board today.");
   // Leave a little of the day's budget for screening ideas posted later today.
   const budgetCents = (await budgetLeftTodayCents(db)) - SCREENING_RESERVE_CENTS;
   if (budgetCents < config.buildBudgetMinUsd * 100) {
-    return finish(db, b, "skipped", null, `Only $${(budgetCents / 100).toFixed(2)} of today's $${config.dailyBudgetUsd} budget is free for building, under the $${config.buildBudgetMinUsd} a build needs. The idea stays at the top for tomorrow.`);
+    return finish(db, b, "skipped", null, `Only $${(budgetCents / 100).toFixed(2)} of today's $${config.dailyBudgetUsd} budget is free for building, under the $${config.buildBudgetMinUsd} a build needs.${idea ? " The idea stays at the top for tomorrow." : ""}`);
+  }
+  if (!idea) {
+    // No idea today: one small housekeeping improvement instead, through the same gates.
+    const nb = await setStatus(db, b.id, "building", { ideaId: null, budgetCents, attempt: 0 });
+    await appendLog(db, b.id, "freeze", `No ideas on the board today, so it's a housekeeping day: one small fix or improvement. Budget $${(budgetCents / 100).toFixed(2)}.`);
+    return nb;
   }
   await db.update(ideas).set({ status: "frozen", frozenAt: new Date() }).where(eq(ideas.id, idea.id));
   await audit(db, null, "freeze", `idea:${idea.id}`, { day: b.day, votes: idea.voteCount });
@@ -162,8 +194,9 @@ function remainingUsd(b: Build): number {
 }
 
 async function stepBuild(db: Database, b: Build): Promise<Build> {
-  const [idea] = await db.select({ idea: ideas, login: users.githubLogin, githubId: users.githubId }).from(ideas).innerJoin(users, eq(users.id, ideas.authorId)).where(eq(ideas.id, b.ideaId!));
-  if (!idea) return finish(db, b, "failed", null, "The idea disappeared.");
+  const task = await loadTask(db, b);
+  if (!task) return finish(db, b, "failed", null, "The idea disappeared.");
+  const ideaOutcome = (s: "failed" | "open") => (task.housekeeping ? null : s);
   // A restart mid-attempt: meter what that attempt spent, then start it again cleanly.
   if (b.activeToken) {
     b = await addCost(db, b, await revokeToken(b.activeToken), `Attempt ${b.attempt} (interrupted)`);
@@ -182,23 +215,27 @@ async function stepBuild(db: Database, b: Build): Promise<Build> {
     const attempt = b.attempt + 1;
     const reviewReserve = Math.min(5, remainingUsd(b) * 0.25);
     const budgetUsd = Math.max(0, remainingUsd(b) - reviewReserve);
-    if (budgetUsd < 1) return finish(db, b, "failed", "failed", feedback ? "The idea couldn't pass the guardrails within the budget." : "The budget ran out before building.");
+    if (budgetUsd < 1) return finish(db, b, "failed", ideaOutcome("failed"), feedback ? "The change couldn't pass the guardrails within the budget." : "The budget ran out before building.");
     if (attempt === 1) await resetWorkTree(dirs, baseSha!);
     const token = newBuildToken();
     await registerToken(token, budgetUsd, `build ${b.id} attempt ${attempt}`);
     b = await setStatus(db, b.id, "building", { attempt, activeToken: token });
     await appendLog(db, b.id, "build", `Attempt ${attempt}: the builder is working (budget $${budgetUsd.toFixed(2)}, model ${config.buildModel}).`);
-    const result = await runAttempt(dirs, { buildId: b.id, attempt, budgetUsd, idea: { id: idea.idea.id, title: idea.idea.title, body: idea.idea.body, author: idea.login }, feedback }, token);
+    const result = await runAttempt(dirs, { buildId: b.id, attempt, budgetUsd, idea: { id: task.idea.id, title: task.idea.title, body: task.idea.body, author: task.author.login }, feedback }, token);
     b = await setStatus(db, b.id, "gating", { activeToken: null, summary: result.summary || b.summary });
     b = await addCost(db, b, result.costUsd, `Builder attempt ${attempt}`);
     await appendLog(db, b.id, "build", `Attempt ${attempt} ${result.status}; $${result.costUsd.toFixed(2)} spent.${result.error ? ` ${result.error}` : ""}`);
-    if (result.status === "gave_up") return finish(db, b, "failed", "failed", `The builder couldn't build this within oojam's rules: ${result.summary}`);
+    if (result.status === "gave_up") {
+      return task.housekeeping
+        ? finish(db, b, "skipped", null, `Housekeeping: nothing needed doing (${result.summary.slice(0, 300)}).`)
+        : finish(db, b, "failed", "failed", `The builder couldn't build this within oojam's rules: ${result.summary}`);
+    }
     if (result.status === "error" && !result.summary) {
       feedback = `The previous attempt didn't finish: ${result.error ?? "unknown error"}. Log tail:\n${result.logTail}`;
       b = await setStatus(db, b.id, "building", { gateReport: feedback });
       continue;
     }
-    const headSha = await commitWorkTree(dirs, `${idea.idea.title}\n\nBuilt by oojam's daily builder for idea #${idea.idea.id}.`);
+    const headSha = await commitWorkTree(dirs, task.housekeeping ? "Housekeeping\n\nA small improvement by oojam's daily builder on a day with no idea." : `${task.idea.title}\n\nBuilt by oojam's daily builder for idea #${task.idea.id}.`);
     if (!headSha) {
       feedback = "The previous attempt made no changes.";
       b = await setStatus(db, b.id, "building", { gateReport: feedback });
@@ -209,49 +246,54 @@ async function stepBuild(db: Database, b: Build): Promise<Build> {
       dirs,
       baseSha: baseSha!,
       headSha,
-      idea: idea.idea,
+      idea: task.idea,
       routes: result.routes,
       reviewBudgetUsd: Math.max(1, Math.min(8, remainingUsd(b))),
       log: (step, message) => appendLog(db, b.id, step, message),
     });
     b = await addCost(db, b, gate.reviewCostUsd, "Independent review");
     b = await setStatus(db, b.id, "gating", { gateReport: gate.report });
-    if (gate.passed) return openPr(db, b, dirs, headSha, idea.idea, { login: idea.login, githubId: idea.githubId });
+    if (gate.passed) return openPr(db, b, dirs, headSha, task);
     await appendLog(db, b.id, "gate", `Attempt ${attempt} was blocked by the guardrails.`);
     feedback = gate.report;
   }
-  return finish(db, b, "failed", "failed", "The change didn't pass oojam's guardrails after two attempts. See the gate report.");
+  return finish(db, b, "failed", ideaOutcome("failed"), "The change didn't pass oojam's guardrails after two attempts. See the gate report.");
 }
 
 interface BuildEntry {
   day: string;
-  ideaId: number;
+  /** null for housekeeping days. */
+  ideaId: number | null;
   title: string;
   author: string;
   prUrl: string;
   summary: string;
 }
 
-async function openPr(
-  db: Database,
-  b: Build,
-  dirs: ReturnType<typeof buildDirs>,
-  builderSha: string,
-  idea: typeof ideas.$inferSelect,
-  author: { login: string; githubId: number },
-): Promise<Build> {
+/** A PR title for the task; housekeeping is titled after what it fixed. */
+function prTitle(task: Task, summary: string | null): string {
+  if (!task.housekeeping) return task.idea.title;
+  const first = (summary ?? "").split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").trim()).find(Boolean) ?? "a small improvement";
+  return `Housekeeping: ${first.length > 90 ? `${first.slice(0, 89)}…` : first}`;
+}
+
+async function openPr(db: Database, b: Build, dirs: ReturnType<typeof buildDirs>, builderSha: string, task: Task): Promise<Build> {
   if (config.dryRun) {
     await appendLog(db, b.id, "pr", "Dry run: the change passed every gate. Not opening a PR.");
-    return finish(db, b, "skipped", "open", "Dry run complete.");
+    return finish(db, b, "skipped", task.housekeeping ? null : "open", "Dry run complete.");
   }
-  const branch = `build/${b.day}-idea-${idea.id}`;
+  const idea = task.idea;
+  const title = prTitle(task, b.summary);
+  const branch = task.housekeeping ? `build/${b.day}-housekeeping` : `build/${b.day}-idea-${idea.id}`;
   // Push the builder's commit first so the PR exists; then add the changelog entry, which needs the PR URL.
   await pushBranch(dirs, builderSha, branch);
   const firstLine = (b.summary ?? "").split("\n").find((l) => l.trim()) ?? idea.title;
-  const body = `## ${idea.title}
+  const intro = task.housekeeping
+    ? `No idea was on the board on ${b.day}, so oojam's daily builder made one small improvement instead.`
+    : `Idea #${idea.id} by @${task.author.login}, built by oojam's daily builder on ${b.day}.\n${idea.body ? `\n> ${idea.body.slice(0, 2000).replace(/\n/g, "\n> ")}\n` : ""}`;
+  const body = `## ${title}
 
-Idea #${idea.id} by @${author.login}, built by oojam's daily builder on ${b.day}.
-${idea.body ? `\n> ${idea.body.slice(0, 2000).replace(/\n/g, "\n> ")}\n` : ""}
+${intro}
 ### What was built
 ${b.summary || "(no summary)"}
 
@@ -261,9 +303,16 @@ ${b.gateReport ?? ""}
 Cost so far: $${(b.costCents / 100).toFixed(2)} of a $${(b.budgetCents / 100).toFixed(2)} budget · [build page](${config.platformUrl}/builds/${b.id})
 
 This PR is merged automatically when CI passes.`;
-  const pr = await openPullRequest({ branch, title: idea.title, body: body.slice(0, 60_000) });
+  const pr = await openPullRequest({ branch, title, body: body.slice(0, 60_000) });
   const entries = JSON.parse(readFileSync(join(dirs.workTree, "content/builds.json"), "utf8")) as BuildEntry[];
-  entries.push({ day: b.day, ideaId: idea.id, title: idea.title, author: author.login, prUrl: pr.html_url, summary: firstLine.replace(/^#+\s*/, "").slice(0, 280) });
+  entries.push({
+    day: b.day,
+    ideaId: task.housekeeping ? null : idea.id,
+    title,
+    author: task.author.login,
+    prUrl: pr.html_url,
+    summary: firstLine.replace(/^#+\s*/, "").slice(0, 280),
+  });
   const head = await commitPlatformFile(dirs, "content/builds.json", `${JSON.stringify(entries, null, 2)}\n`, `Add ${b.day} to the changelog`);
   await pushBranch(dirs, head, branch);
   await appendLog(db, b.id, "pr", `Opened ${pr.html_url}`);
@@ -271,25 +320,29 @@ This PR is merged automatically when CI passes.`;
 }
 
 async function stepMerge(db: Database, b: Build): Promise<Build> {
-  const [idea] = await db.select({ idea: ideas, login: users.githubLogin, githubId: users.githubId }).from(ideas).innerJoin(users, eq(users.id, ideas.authorId)).where(eq(ideas.id, b.ideaId!));
+  const task = await loadTask(db, b);
+  if (!task) return finish(db, b, "failed", null, "The idea disappeared.");
+  const outcome = task.housekeeping ? null : ("failed" as const);
   const { gh } = await import("./github.js");
   const pr = await gh<{ head: { sha: string }; merged: boolean; merge_commit_sha: string | null; state: string }>("GET", `/repos/${config.siteRepo}/pulls/${b.prNumber}`);
   if (pr.merged && pr.merge_commit_sha) return setStatus(db, b.id, "deploying", { mergeSha: pr.merge_commit_sha });
-  if (pr.state !== "open") return finish(db, b, "failed", "failed", "The PR was closed before it could be merged.");
+  if (pr.state !== "open") return finish(db, b, "failed", outcome, "The PR was closed before it could be merged.");
   await appendLog(db, b.id, "ci", "Waiting for CI");
   const checks = await waitForChecks(pr.head.sha, 45 * 60_000);
   if (checks.failures.length) {
     await commentOnPullRequest(b.prNumber!, `CI failed, so this build won't be merged:\n${checks.failures.map((f) => `- ${f}`).join("\n")}`).catch(() => {});
     await closePullRequest(b.prNumber!).catch(() => {});
-    return finish(db, b, "failed", "failed", `CI failed: ${checks.failures.join("; ")}`);
+    return finish(db, b, "failed", outcome, `CI failed: ${checks.failures.join("; ")}`);
   }
   if ((await getPaused(db)).paused) {
     await appendLog(db, b.id, "paused", "CI passed, but the system is paused; the merge waits.");
     return b;
   }
   await setStatus(db, b.id, "merging");
-  const message = `Idea #${idea!.idea.id}, built on ${b.day}. ${config.platformUrl}/builds/${b.id}\n\n${coAuthorTrailer(idea!.githubId, idea!.login)}`;
-  const mergeSha = await squashMerge(b.prNumber!, pr.head.sha, `${idea!.idea.title} (#${b.prNumber})`, message);
+  const message = task.housekeeping
+    ? `Housekeeping on ${b.day}. ${config.platformUrl}/builds/${b.id}`
+    : `Idea #${task.idea.id}, built on ${b.day}. ${config.platformUrl}/builds/${b.id}\n\n${coAuthorTrailer(task.author.githubId!, task.author.login)}`;
+  const mergeSha = await squashMerge(b.prNumber!, pr.head.sha, `${prTitle(task, b.summary)} (#${b.prNumber})`, message);
   await appendLog(db, b.id, "merge", `Merged as ${mergeSha.slice(0, 12)}`);
   return setStatus(db, b.id, "deploying", { mergeSha });
 }

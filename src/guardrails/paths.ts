@@ -9,6 +9,9 @@ const PROTECTED_FILES = new Set([
   ".nvmrc",
   "scripts/migrate.mjs",
   "app/routes/_health.ts",
+  "app/lib/oojam-identity.server.ts",
+  "app/routes/_oojam.callback.ts",
+  "app/routes/_oojam.signout.ts",
   "content/builds.json",
   ".mcp.json",
 ]);
@@ -40,6 +43,13 @@ function touchedPaths(f: ChangedFile): string[] {
   return f.oldPath ? [f.oldPath, f.path] : [f.path];
 }
 
+/** Lines app/routes.ts must keep: health checks and "Sign in with oojam". */
+export const MANAGED_ROUTE_LINES = [
+  'route("_health", "routes/_health.ts"),',
+  'route("_oojam/callback", "routes/_oojam.callback.ts"),',
+  'route("_oojam/signout", "routes/_oojam.signout.ts"),',
+];
+
 export function checkPaths(changes: ChangeSet): Finding[] {
   const findings: Finding[] = [];
   const add = (file: string, message: string) => findings.push({ check: "paths", severity: "block", file, message });
@@ -64,6 +74,15 @@ export function checkPaths(changes: ChangeSet): Finding[] {
     if (f.size > MAX_FILE_BYTES) add(f.path, `is ${(f.size / 1024).toFixed(0)} KB; the limit per file is 1 MB`);
     if (f.binary && !f.path.startsWith("public/")) add(f.path, "is binary; binary files may only go in public/");
     if (!SIZE_EXEMPT.has(f.path)) total += f.binary ? f.size : f.added.reduce((n, l) => n + l.text.length + 1, 0);
+  }
+  const routes = changes.files.find((f) => f.path === "app/routes.ts" || f.oldPath === "app/routes.ts");
+  if (routes) {
+    const kept = routes.status !== "D" && routes.path === "app/routes.ts" ? (routes.content ?? "") : "";
+    for (const line of MANAGED_ROUTE_LINES) {
+      if (!kept.split("\n").some((l) => l.trim() === line)) {
+        add("app/routes.ts", `must keep the managed line \`${line}\``);
+      }
+    }
   }
   if (total > MAX_TOTAL_BYTES) {
     findings.push({

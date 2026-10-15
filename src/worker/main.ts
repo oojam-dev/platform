@@ -13,7 +13,8 @@ import { utcDay } from "../core/time.js";
 import { closeDb, getDb } from "../db/client.js";
 import { builds } from "../db/schema.js";
 import { runCycle } from "./cycle.js";
-import { ensureSiteRunning, rollbackTo } from "./deployer.js";
+import { deploySite, ensureSiteRunning, rollbackTo } from "./deployer.js";
+import { freshCheckout } from "./workspace.js";
 
 const db = getDb();
 let busy: Promise<unknown> | undefined;
@@ -62,6 +63,13 @@ async function tick(): Promise<void> {
   if (!req) return;
   if (req.type === "run_cycle") {
     await exclusive("run_cycle", () => runCycle(db, utcDay()));
+  } else if (req.type === "deploy_main") {
+    // A maintainer's change on main (no build involved): same safe path as a merged build.
+    await exclusive("deploy_main", async () => {
+      const { baseSha } = await freshCheckout(-1);
+      await deploySite(db, baseSha, null, async (m) => console.log(`worker: deploy main: ${m}`));
+      await audit(db, req.by, "deploy_main_done", "site", { sha: baseSha });
+    });
   } else if (req.type === "rollback") {
     await exclusive("rollback", async () => {
       await rollbackTo(db, req.deploymentId);

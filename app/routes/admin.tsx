@@ -61,6 +61,9 @@ export async function action({ request }: Route.ActionArgs) {
         await setPaused(db, user.id, { paused: intent === "pause", reason });
         return ok(intent === "pause" ? "The cycle is paused." : "The cycle is running again.");
       }
+      case "deploy_main":
+        await requestWorker(db, user.id, { type: "deploy_main" });
+        return ok("Asked the worker to deploy oojam-dev/oojam main. It picks requests up within a minute.");
       case "run_cycle":
         await requestWorker(db, user.id, { type: "run_cycle" });
         return ok("Asked the worker to run today's cycle. It picks requests up within a minute.");
@@ -166,13 +169,22 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
           {pending.map((p) => (
             <Notice key={p.type} tone="jam" className="mb-3">
               Pending worker request:{" "}
-              <strong>{p.type === "run_cycle" ? "run cycle" : `rollback to #${p.deploymentId}`}</strong> since{" "}
+              <strong>{p.type === "run_cycle" ? "run cycle" : p.type === "deploy_main" ? "deploy main" : `rollback to #${p.deploymentId}`}</strong> since{" "}
               {dateTime(p.requestedAt)}.
             </Notice>
           ))}
           <Form method="post">
             <CsrfInput />
             <Submit intent="run_cycle">Run today's cycle</Submit>
+          </Form>
+          <hr className="my-5 border-line" />
+          <p className="text-sm text-ink-2">
+            Deploy what's on <code>main</code> of oojam-dev/oojam now, e.g. after a maintainer's fix. Backs up the
+            database, migrates, health-checks and rolls back automatically if it fails.
+          </p>
+          <Form method="post" className="mt-3">
+            <CsrfInput />
+            <Submit intent="deploy_main">Deploy main now</Submit>
           </Form>
         </Panel>
 

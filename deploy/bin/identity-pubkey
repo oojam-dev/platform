@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Prints the public key matching OOJAM_IDENTITY_PRIVATE_KEY, for oojam-dev/oojam's
+# app/lib/oojam-identity.server.ts. Rotating the key means updating that file in the same go.
+source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+env_get OOJAM_IDENTITY_PRIVATE_KEY | base64 -d | openssl pkey -pubout
