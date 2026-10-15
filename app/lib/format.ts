@@ -59,3 +59,12 @@ export function clock(totalSeconds: number): string {
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 }
+
+/** Seconds → "45s", "7m 32s", "1h 04m". */
+export function duration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}

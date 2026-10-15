@@ -14,6 +14,13 @@ const SECRET_PATTERNS: [RegExp, string][] = [
   [/\b[A-Z0-9_]*(?:SECRET|PASSWORD|API_KEY|PRIVATE_KEY|TOKEN)\s*[=:]\s*['"]?[A-Za-z0-9+/_\-]{24,}/, "a hard-coded secret"],
 ];
 
+/** Replaces anything that looks like a secret, for text shown in public (e.g. live build progress). */
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const [re] of SECRET_PATTERNS) out = out.replace(new RegExp(re.source, `${re.flags}g`), "[redacted]");
+  return out;
+}
+
 const CODE_FILE = /\.(?:[cm]?[jt]sx?|html?|svelte|vue)$/;
 
 interface Pattern {

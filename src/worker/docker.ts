@@ -1,5 +1,6 @@
 /** A thin wrapper over the docker CLI (the worker mounts the host's socket). */
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 export interface RunResult {
   code: number;
@@ -8,7 +9,15 @@ export interface RunResult {
   timedOut: boolean;
 }
 
-export function docker(args: string[], opts: { input?: string; timeoutMs?: number; allowFail?: boolean } = {}): Promise<RunResult> {
+export interface DockerOptions {
+  input?: string;
+  timeoutMs?: number;
+  allowFail?: boolean;
+  /** Called with stdout as it arrives (whole UTF-8 characters), as well as collected. */
+  onStdout?: (text: string) => void;
+}
+
+export function docker(args: string[], opts: DockerOptions = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     // stdin only when there's input (see guardrails/git.ts: an unused pipe can EPIPE).
     const child = spawn("docker", args, { stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
@@ -21,7 +30,17 @@ export function docker(args: string[], opts: { input?: string; timeoutMs?: numbe
           child.kill("SIGKILL");
         }, opts.timeoutMs)
       : undefined;
-    child.stdout!.on("data", (b: Buffer) => out.push(b));
+    const decoder = opts.onStdout ? new StringDecoder("utf8") : undefined;
+    child.stdout!.on("data", (b: Buffer) => {
+      out.push(b);
+      if (decoder) {
+        try {
+          opts.onStdout!(decoder.write(b));
+        } catch {
+          // A watcher must never break the run.
+        }
+      }
+    });
     child.stderr!.on("data", (b: Buffer) => err.push(b));
     child.on("error", reject);
     child.on("close", (code) => {

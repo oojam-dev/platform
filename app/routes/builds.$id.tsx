@@ -3,7 +3,8 @@ import { Link, data } from "react-router";
 import { getBuild } from "../../src/core/stats.js";
 import { getDb } from "../../src/db/client.js";
 import { BackLink, Markdown, Notice, StatusChip } from "../components/ui";
-import { dateTime, day, money } from "../lib/format";
+import { ago, dateTime, day, duration, money, plural } from "../lib/format";
+import { isLive, useNow, useRevalidateWhile } from "../lib/live";
 import { renderMarkdown } from "../lib/markdown.server";
 import type { Route } from "./+types/builds.$id";
 
@@ -29,6 +30,8 @@ export async function loader({ params }: Route.LoaderArgs) {
       mergeSha: b.mergeSha,
       error: b.error,
       log: b.log ?? [],
+      // Only meaningful while an attempt runs; the worker clears it afterwards.
+      progress: b.status === "building" ? b.progress : null,
       startedAt: b.startedAt,
       finishedAt: b.finishedAt,
       ideaId: b.ideaId,
@@ -36,13 +39,66 @@ export async function loader({ params }: Route.LoaderArgs) {
     },
     summaryHtml: renderMarkdown(b.summary),
     gateHtml: renderMarkdown(b.gateReport),
+    now: Date.now(),
   };
+}
+
+type Build = Route.ComponentProps["loaderData"]["build"];
+
+const STAGE: Record<string, string> = {
+  screening: "Checking the idea against oojam's rules before building.",
+  gating: "Running the guardrails: static checks, the Docker build and tests, a smoke test and an independent review.",
+  pr_open: "The pull request is open; waiting for CI before merging.",
+  merging: "Merging the pull request.",
+  deploying: "Deploying to oojam.dev.",
+};
+
+/** What's happening right now, for a build in flight. */
+function LiveStatus({ build, now }: { build: Build; now: number }) {
+  const p = build.progress;
+  const since = p?.startedAt ?? build.startedAt;
+  return (
+    <section aria-labelledby="live-title" className="card border-jam/40 p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 id="live-title" className="kicker flex items-center gap-2">
+          <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-jam" />
+          {build.status === "building" ? `Claude is building${build.attempt > 1 ? ` · attempt ${build.attempt}` : ""}` : "In progress"}
+        </h2>
+        {since && (
+          <p className="num text-sm text-ink-3">
+            {duration((now - new Date(since).getTime()) / 1000)} {build.status === "building" && p ? "on this attempt" : "since the build started"}
+          </p>
+        )}
+      </div>
+      {build.status === "building" ? (
+        <>
+          <p className="mt-3 leading-relaxed text-ink-2 [overflow-wrap:anywhere]" aria-live="polite">
+            {p?.note ? <>“{p.note}”</> : "Starting up and reading the code…"}
+          </p>
+          {p && (
+            <p className="num mt-2 text-xs text-ink-3">
+              {plural(p.toolCalls, "tool call")} · updated {ago(p.updatedAt, now)}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="mt-3 leading-relaxed text-ink-2">{STAGE[build.status] ?? "Working…"}</p>
+      )}
+      <p className="mt-3 text-xs text-ink-3">This page refreshes itself every 15 seconds until the build finishes.</p>
+    </section>
+  );
 }
 
 export default function BuildPage({ loaderData }: Route.ComponentProps) {
   const { build, summaryHtml, gateHtml } = loaderData;
-  const pct = build.budgetCents > 0 ? Math.min(100, Math.round((build.costCents / build.budgetCents) * 100)) : 0;
-  const over = build.budgetCents > 0 && build.costCents > build.budgetCents;
+  const live = isLive(build.status);
+  useRevalidateWhile(live);
+  const now = useNow(loaderData.now, live);
+  // While an attempt runs, its spend is only on the gateway's meter; add it so the card moves.
+  const liveCents = build.progress?.spentUsd != null ? Math.ceil(build.progress.spentUsd * 100) : 0;
+  const spentCents = build.costCents + liveCents;
+  const pct = build.budgetCents > 0 ? Math.min(100, Math.round((spentCents / build.budgetCents) * 100)) : 0;
+  const over = build.budgetCents > 0 && spentCents > build.budgetCents;
 
   return (
     <article>
@@ -66,6 +122,8 @@ export default function BuildPage({ loaderData }: Route.ComponentProps) {
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-12">
         <div className="min-w-0 space-y-10">
+          {live && <LiveStatus build={build} now={now} />}
+
           {build.error && (
             <Notice tone="warn" title={build.status === "skipped" ? "Skipped" : "What went wrong"}>
               <p className="whitespace-pre-wrap">{build.error}</p>
@@ -127,8 +185,10 @@ export default function BuildPage({ loaderData }: Route.ComponentProps) {
         <aside className="space-y-4">
           <div className="card p-5">
             <p className="kicker">Cost vs budget</p>
-            <p className="num mt-2 font-display text-3xl font-black tracking-tight">{money(build.costCents)}</p>
-            <p className="text-sm text-ink-2">of a {money(build.budgetCents)} budget</p>
+            <p className="num mt-2 font-display text-3xl font-black tracking-tight">{money(spentCents)}</p>
+            <p className="text-sm text-ink-2">
+              {liveCents > 0 ? "spent so far, " : ""}of a {money(build.budgetCents)} budget
+            </p>
             <div
               className="mt-4 h-2.5 overflow-hidden rounded-full bg-sunk"
               role="meter"
@@ -139,7 +199,10 @@ export default function BuildPage({ loaderData }: Route.ComponentProps) {
             >
               <div className={`h-full rounded-full ${over ? "bg-warn" : "bg-jam"}`} style={{ width: `${pct}%` }} />
             </div>
-            <p className="mt-2 text-xs text-ink-3">Counts towards the day's budget. Metered per token by the gateway.</p>
+            <p className="mt-2 text-xs text-ink-3">
+              {liveCents > 0 && `Includes ${money(liveCents)} metered live for attempt ${build.progress!.attempt}. `}
+              Counts towards the day's budget. Metered per token by the gateway.
+            </p>
           </div>
           <dl className="card divide-y divide-line text-sm">
             {build.prUrl && (

@@ -4,7 +4,9 @@ import { chownSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 
 import { config } from "../core/config.js";
+import type { BuildProgress } from "../db/schema.js";
 import { HARDENED, docker, removeContainer, tail } from "./docker.js";
+import { ProgressTracker, throttled } from "./progress.js";
 import type { BuildDirs } from "./workspace.js";
 
 export interface AttemptInput {
@@ -43,13 +45,27 @@ export async function registerToken(token: string, budgetUsd: number, label: str
   await gateway("POST", "/admin/tokens", { token, budgetUsd, label });
 }
 
+/** What a token has spent so far, or null if the gateway doesn't know it (or can't be reached). */
+export async function tokenSpend(token: string): Promise<number | null> {
+  const r = (await gateway("GET", `/admin/tokens/${encodeURIComponent(token)}`).catch(() => undefined)) as { spentUsd?: number } | undefined;
+  return typeof r?.spentUsd === "number" ? r.spentUsd : null;
+}
+
 /** Revokes a token and returns what it spent (0 if the gateway forgot it). */
 export async function revokeToken(token: string): Promise<number> {
   const r = (await gateway("DELETE", `/admin/tokens/${encodeURIComponent(token)}`).catch(() => undefined)) as { spentUsd?: number } | undefined;
   return r?.spentUsd ?? 0;
 }
 
-export async function runAttempt(dirs: BuildDirs, input: AttemptInput, token: string): Promise<AttemptResult> {
+/** How often the worker checks whether a progress note is due; the note itself is throttled. */
+const PROGRESS_TICK_MS = 5_000;
+
+export async function runAttempt(
+  dirs: BuildDirs,
+  input: AttemptInput,
+  token: string,
+  onProgress?: (p: BuildProgress) => Promise<void>,
+): Promise<AttemptResult> {
   const jobDir = join(dirs.root, `job-${input.attempt}`);
   mkdirSync(jobDir, { recursive: true });
   if (process.getuid?.() === 0) chownSync(jobDir, 1000, 1000);
@@ -67,6 +83,15 @@ export async function runAttempt(dirs: BuildDirs, input: AttemptInput, token: st
   );
   const name = `oojam-build-${input.buildId}-${input.attempt}`;
   await removeContainer(name);
+  // Stream the builder's stdout into a progress note while it runs (SPEC §4.5).
+  const startedAt = new Date();
+  const tracker = new ProgressTracker({ secrets: [token, config.gatewayAdminToken] });
+  let lastSpend: number | null = null;
+  const tick = throttled(tracker, async (now) => {
+    lastSpend = (await tokenSpend(token)) ?? lastSpend;
+    await onProgress?.(tracker.snapshot({ attempt: input.attempt, startedAt, budgetUsd: input.budgetUsd, spentUsd: lastSpend }, new Date(now)));
+  });
+  const timer = onProgress ? setInterval(() => void tick(Date.now()), PROGRESS_TICK_MS) : undefined;
   const run = await docker(
     [
       "run",
@@ -89,8 +114,8 @@ export async function runAttempt(dirs: BuildDirs, input: AttemptInput, token: st
       "-e", "npm_config_proxy=http://egress:3128",
       config.builderImage,
     ],
-    { timeoutMs: config.buildTimeoutMin * 60_000, allowFail: true },
-  );
+    { timeoutMs: config.buildTimeoutMin * 60_000, allowFail: true, onStdout: (text) => tracker.push(text) },
+  ).finally(() => clearInterval(timer));
   const logs = `${run.stdout}\n${run.stderr}`;
   await removeContainer(name);
   const resultPath = join(jobDir, "result.json");

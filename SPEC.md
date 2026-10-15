@@ -281,6 +281,17 @@ Denied, with a reason the model sees:
 The builder declares `gave_up` (with a reason) when the idea can't be built within policy.
 The idea is then `failed` with that reason.
 
+### 4.5 Live progress
+
+The builder prints the assistant's text and one `[tool] Name` line per tool call to stdout. The
+worker reads that stream while the container runs (`src/worker/progress.ts`) and, at most every
+30 seconds, **replaces** `builds.progress` with one note: the latest sentence (trimmed to 200
+characters, with anything matching the secret patterns of §5.4 and the build token redacted), the
+tool-call count, when the attempt started, and the token's spend so far from the gateway's
+`GET /admin/tokens/:token`. It's written only while the build is still `building` on that
+attempt, and cleared when the attempt ends. `/builds/:id` shows it, adds the live spend to the
+cost card, and revalidates every 15 seconds until the build reaches a final status.
+
 ---
 
 ## 5. Guardrails (host-side, `src/guardrails`)
@@ -425,7 +436,7 @@ stored on its own.
 - `votes(id, idea_id, user_id, referrer_id?, created_at)`, unique on `(idea_id, user_id)`.
 - `shares(id, idea_id, user_id?, channel, created_at)` and `ref_visits(id, idea_id?, referrer_id, created_at)`.
 - `comments(id, idea_id, user_id, body, hidden_at, created_at)`
-- `builds(id, day date unique, idea_id, active_token, skipped_idea_ids jsonb, status: queued|screening|building|gating|pr_open|merging|deploying|deployed|failed|rolled_back|skipped, attempt, budget_cents, cost_cents, branch, pr_number, pr_url, merge_sha, gate_report text, summary text, error text, log jsonb, started_at, finished_at, created_at)`
+- `builds(id, day date unique, idea_id, active_token, skipped_idea_ids jsonb, status: queued|screening|building|gating|pr_open|merging|deploying|deployed|failed|rolled_back|skipped, attempt, budget_cents, cost_cents, branch, pr_number, pr_url, merge_sha, gate_report text, summary text, error text, log jsonb, progress jsonb?, started_at, finished_at, created_at)`
 - `deployments(id, build_id?, sha, container, status: candidate|live|retired|failed, created_at, promoted_at)`
 - `controls(key pk, value jsonb, updated_by, updated_at)`. Keys: `paused` `{paused: bool, reason}`.
 - `audit_log(id, actor_id?, action, subject, data jsonb, created_at)`
