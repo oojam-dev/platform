@@ -8,6 +8,7 @@ import { RuleError } from "./errors.js";
 import { budgetLeftTodayCents, chargeBuild, chargeScreening, spentSinceCents } from "./spend.js";
 import { fundEntries } from "../db/schema.js";
 import { listVoters, postIdea, postsToday, rejectAtScreening, unvote, validateIdea, vote, votedOn } from "./votes.js";
+import { costSummary } from "./stats.js";
 import { recordRefVisit, recordShare, referralSummary, setReferrer, viralStats } from "./referrals.js";
 
 describe("validateIdea", () => {
@@ -140,5 +141,7 @@ describe.skipIf(!hasDb)("votes, referrals and spend (postgres)", () => {
     await chargeBuild(db, 1, 900, "over budget");
     expect(await budgetLeftTodayCents(db)).toBe(0);
     expect(await spentSinceCents(db, new Date(Date.now() - 2 * 86_400_000))).toBe(900 + 640 + 35 + 900);
+    const summary = await costSummary(db);
+    expect(summary).toMatchObject({ dailyBudgetCents: 1_000, todayCents: 640 + 35 + 900, allTimeCents: 900 + 640 + 35 + 900, screeningCents: 35 });
   });
 });

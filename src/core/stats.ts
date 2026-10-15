@@ -21,8 +21,8 @@ export async function costSummary(db: DbOrTx, now = new Date()): Promise<CostSum
   const spent = (extra = sql`true`) => sql<number>`coalesce(-sum(${fundEntries.deltaCents}) filter (where ${extra}), 0)::int`;
   const [r] = await db
     .select({
-      today: spent(sql`${fundEntries.createdAt} >= ${day}`),
-      month: spent(sql`${fundEntries.createdAt} >= ${month}`),
+      today: spent(sql`${fundEntries.createdAt} >= ${day.toISOString()}::timestamptz`),
+      month: spent(sql`${fundEntries.createdAt} >= ${month.toISOString()}::timestamptz`),
       all: spent(),
       build: spent(sql`${fundEntries.kind} = 'build_spend'`),
       screening: spent(sql`${fundEntries.kind} = 'screening'`),
