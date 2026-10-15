@@ -9,7 +9,10 @@ import {
   githubUserFromCode,
   upsertGithubUser,
 } from "../../src/core/auth.js";
+import { setReferrer } from "../../src/core/referrals.js";
 import { getDb } from "../../src/db/client.js";
+import { githubUserExists } from "../lib/queries.server";
+import { refFromCookie } from "../lib/referral.server";
 import { clearStateCookie, getCookie, sessionCookie } from "../lib/session.server";
 import type { Route } from "./+types/auth.github.callback";
 
@@ -38,7 +41,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   let user;
   try {
     const gh = await githubUserFromCode(code);
+    const existed = await githubUserExists(db, gh.id);
     user = await upsertGithubUser(db, gh);
+    // A brand-new account that arrived through someone's share link: credit the sharer.
+    const ref = refFromCookie(request);
+    if (!existed && ref) {
+      await setReferrer(db, user.id, ref).catch((error: unknown) => console.error("auth: setReferrer failed:", error));
+    }
   } catch (error) {
     if (error instanceof SignInError) return problem({ kind: "too_new", message: error.message }, 403);
     console.error("auth: GitHub sign-in failed:", error);

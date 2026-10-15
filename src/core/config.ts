@@ -28,8 +28,6 @@ export const config = {
   get sessionSecret() { return str("SESSION_SECRET"); },
   get githubOAuthClientId() { return str("GITHUB_OAUTH_CLIENT_ID"); },
   get githubOAuthClientSecret() { return str("GITHUB_OAUTH_CLIENT_SECRET"); },
-  get stripeSecretKey() { return str("STRIPE_SECRET_KEY"); },
-  get stripeWebhookSecret() { return str("STRIPE_WEBHOOK_SECRET"); },
   get anthropicApiKey() { return process.env.ANTHROPIC_API_KEY || undefined; },
 
   get githubAppId() { return str("GITHUB_APP_ID"); },
@@ -47,9 +45,13 @@ export const config = {
   /** The pinned Postgres image, for scratch databases in the gate. */
   get postgresImage() { return str("POSTGRES_IMAGE", "postgres:17"); },
 
-  get buildFundShare() { return num("BUILD_FUND_SHARE", 0.8); },
-  get maxVotesPerUserPerIdea() { return num("MAX_VOTES_PER_USER_PER_IDEA", 10); },
-  get buildBudgetCapUsd() { return num("BUILD_BUDGET_CAP_USD", 25); },
+  /** Ideas one account may post per UTC day (screening rejections don't count)… */
+  get maxIdeasPerDay() { return num("MAX_IDEAS_PER_DAY", 1); },
+  /** …and attempts, including rejected ones, so nobody can run up the screening bill. */
+  get maxPostAttemptsPerDay() { return num("MAX_POST_ATTEMPTS_PER_DAY", 3); },
+  /** Where "Sponsor oojam" points. Sponsorship funds builds; it never buys votes. */
+  get sponsorUrl() { return str("SPONSOR_URL", "https://github.com/sponsors/oojam-dev"); },
+  get buildBudgetCapUsd() { return num("BUILD_BUDGET_CAP_USD", 10); },
   get buildBudgetMinUsd() { return num("BUILD_BUDGET_MIN_USD", 3); },
   get buildModel() { return str("BUILD_MODEL", "claude-opus-5-5"); },
   get buildEffort() { return str("BUILD_EFFORT", "high"); },
@@ -64,9 +66,3 @@ export const config = {
     return str("ADMIN_GITHUB_LOGINS", "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   },
 };
-
-/** One credit is one dollar. */
-export const CREDIT_CENTS = 100;
-export const TOPUP_MIN_CENTS = 500;
-export const TOPUP_MAX_CENTS = 50_000;
-export const TOPUP_PRESETS_CENTS = [500, 1_000, 2_500] as const;

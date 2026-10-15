@@ -95,6 +95,7 @@ export function createGateway(opts: GatewayOptions): { server: Server; tokens: M
     const presented = (req.headers["x-api-key"] as string | undefined) ?? (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
     const token = presented ? tokens.get(presented) : undefined;
     if (!token) return apiError(res, 401, "authentication_error", "invalid build token");
+    if (!opts.apiKey) return apiError(res, 503, "api_error", "The oojam gateway has no Anthropic key configured.");
     if (req.method !== "POST" || !FORWARDED_PATHS.has(url.pathname)) return apiError(res, 404, "not_found_error", "not available through the oojam gateway");
     if (token.spentUsd >= token.budgetUsd) {
       return apiError(res, 429, "rate_limit_error", `This build's budget of $${token.budgetUsd.toFixed(2)} is spent. Finish up now.`);

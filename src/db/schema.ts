@@ -33,6 +33,8 @@ export const users = pgTable("users", {
   isAdmin: boolean("is_admin").default(false).notNull(),
   bannedAt: ts("banned_at"),
   bannedReason: text("banned_reason"),
+  /** Whose share link brought this account to oojam (for the viral coefficient). */
+  referredBy: ref("referred_by"),
   createdAt: createdAt(),
 });
 
@@ -48,64 +50,26 @@ export const sessions = pgTable(
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
-export type TopupStatus = "pending" | "paid" | "failed" | "refunded" | "disputed";
+export type FundKind = "contribution" | "build_spend" | "screening" | "adjustment";
 
-export const topups = pgTable(
-  "topups",
-  {
-    id: id(),
-    userId: ref("user_id").notNull().references(() => users.id),
-    stripeCheckoutId: text("stripe_checkout_id").unique(),
-    stripePaymentIntent: text("stripe_payment_intent"),
-    amountCents: integer("amount_cents").notNull(),
-    status: text("status").$type<TopupStatus>().notNull().default("pending"),
-    createdAt: createdAt(),
-    paidAt: ts("paid_at"),
-  },
-  (t) => [
-    index("topups_user_idx").on(t.userId),
-    index("topups_payment_intent_idx").on(t.stripePaymentIntent),
-    check("topups_amount_check", sql`${t.amountCents} > 0`),
-  ],
-);
-
-export type WalletKind = "topup" | "post" | "vote" | "refund" | "adjustment";
-
-export const walletEntries = pgTable(
-  "wallet_entries",
-  {
-    id: id(),
-    userId: ref("user_id").notNull().references(() => users.id),
-    deltaCents: integer("delta_cents").notNull(),
-    kind: text("kind").$type<WalletKind>().notNull(),
-    topupId: ref("topup_id").references(() => topups.id),
-    ideaId: ref("idea_id"),
-    note: text("note"),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    index("wallet_entries_user_idx").on(t.userId),
-    // A top-up is credited at most once, whatever Stripe redelivers.
-    uniqueIndex("wallet_entries_topup_once").on(t.topupId).where(sql`${t.kind} = 'topup'`),
-  ],
-);
-
-export type FundAccount = "build" | "hosting";
-export type FundKind = "commit" | "build_spend" | "screening" | "adjustment";
-
+/**
+ * The build fund: what sponsors and the maintainers put in, and what builds and screening
+ * cost. Public on /fund. Nobody buys votes; money only ever pays for builds.
+ */
 export const fundEntries = pgTable(
   "fund_entries",
   {
     id: id(),
-    account: text("account").$type<FundAccount>().notNull(),
     deltaCents: integer("delta_cents").notNull(),
     kind: text("kind").$type<FundKind>().notNull(),
-    walletEntryId: ref("wallet_entry_id").references(() => walletEntries.id),
+    /** Who it came from, for contributions (e.g. "GitHub Sponsors, October", "@tholder"). */
+    source: text("source"),
     buildId: ref("build_id"),
+    actorId: ref("actor_id").references(() => users.id),
     note: text("note"),
     createdAt: createdAt(),
   },
-  (t) => [index("fund_entries_account_idx").on(t.account), index("fund_entries_build_idx").on(t.buildId)],
+  (t) => [index("fund_entries_kind_idx").on(t.kind), index("fund_entries_build_idx").on(t.buildId)],
 );
 
 export type IdeaStatus = "open" | "frozen" | "building" | "deployed" | "failed" | "rejected" | "withdrawn";
@@ -146,10 +110,16 @@ export const votes = pgTable(
     id: id(),
     ideaId: ref("idea_id").notNull().references(() => ideas.id),
     userId: ref("user_id").notNull().references(() => users.id),
-    walletEntryId: ref("wallet_entry_id").notNull().unique().references(() => walletEntries.id),
+    /** Whose share link this vote came through, if any. */
+    referrerId: ref("referrer_id").references(() => users.id),
     createdAt: createdAt(),
   },
-  (t) => [index("votes_idea_user_idx").on(t.ideaId, t.userId)],
+  (t) => [
+    // One vote per account per idea.
+    uniqueIndex("votes_idea_user_key").on(t.ideaId, t.userId),
+    index("votes_user_idx").on(t.userId),
+    index("votes_referrer_idx").on(t.referrerId),
+  ],
 );
 
 export const comments = pgTable(
@@ -231,17 +201,36 @@ export const deployments = pgTable(
   (t) => [index("deployments_status_idx").on(t.status)],
 );
 
+/** Someone clicked a share button (counts only; what they then did is in ref_visits/votes). */
+export const shares = pgTable(
+  "shares",
+  {
+    id: id(),
+    ideaId: ref("idea_id").notNull().references(() => ideas.id),
+    userId: ref("user_id").references(() => users.id),
+    channel: text("channel").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("shares_idea_idx").on(t.ideaId), index("shares_created_idx").on(t.createdAt)],
+);
+
+/** A page view that arrived through someone's share link (?ref=login). */
+export const refVisits = pgTable(
+  "ref_visits",
+  {
+    id: id(),
+    ideaId: ref("idea_id").references(() => ideas.id),
+    referrerId: ref("referrer_id").notNull().references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("ref_visits_referrer_idx").on(t.referrerId), index("ref_visits_created_idx").on(t.createdAt)],
+);
+
 export const controls = pgTable("controls", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),
   updatedBy: ref("updated_by").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
-export const stripeEvents = pgTable("stripe_events", {
-  id: text("id").primaryKey(),
-  type: text("type").notNull(),
-  receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const auditLog = pgTable(

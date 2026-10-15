@@ -45,12 +45,3 @@ export async function makeUser(db: Database, opts: Partial<typeof schema.users.$
     .returning();
   return u!;
 }
-
-/** Gives a user wallet credit the way a real paid top-up would. */
-export async function fund(db: Database, userId: number, cents: number) {
-  const [t] = await db
-    .insert(schema.topups)
-    .values({ userId, amountCents: cents, status: "paid", stripeCheckoutId: `cs_${randomBytes(6).toString("hex")}` })
-    .returning();
-  await db.insert(schema.walletEntries).values({ userId, deltaCents: cents, kind: "topup", topupId: t!.id });
-}

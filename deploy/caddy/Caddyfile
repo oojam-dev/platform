@@ -62,18 +62,33 @@
 
 # ── The platform's headers. CSP is a default only (`?`): if platform-web sends
 # its own (e.g. a nonce-based one), that one is kept. Everything else is forced.
-# form-action allows the two cross-origin redirects that follow a form post:
-# Stripe Checkout (POST /wallet/topup → 303) and GitHub OAuth.
+# form-action allows the cross-origin redirect that follows sign-in: GitHub OAuth.
 (platform_headers) {
 	header {
 		defer
-		?Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com https://github.com"
+		?Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://github.com"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		Cross-Origin-Opener-Policy "same-origin"
 		X-Frame-Options "DENY"
+		-X-Powered-By
+		-Server
+	}
+}
+
+# ── Embeddable idea cards (/embed/*, oEmbed): any site may frame them, so they get
+# their own forced CSP with frame-ancestors * and no X-Frame-Options/COOP.
+(embed_headers) {
+	header {
+		defer
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors *; base-uri 'self'; form-action 'self'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-X-Frame-Options
+		-Cross-Origin-Opener-Policy
 		-X-Powered-By
 		-Server
 	}
@@ -118,23 +133,16 @@ www.{$SITE_DOMAIN} {
 
 # ── build.oojam.dev: the platform ────────────────────────────────────────────
 {$PLATFORM_DOMAIN} {
-	import platform_headers
 	encode zstd gzip
 
-	# Stripe signs the exact bytes it sends (SPEC §6.5). Caddy streams request
-	# bodies to the upstream untouched (no request buffering or decoding is
-	# configured anywhere here), so the signature verifies against the raw body.
-	handle /stripe/webhook {
-		request_body {
-			max_size 1MB
-		}
-		reverse_proxy platform-web:3000 {
-			header_down -X-Powered-By
-			header_down -Server
-		}
+	@embed path /embed/* /oembed
+	handle @embed {
+		import embed_headers
+		reverse_proxy platform-web:3000
 	}
 
 	handle {
+		import platform_headers
 		request_body {
 			max_size 1MB
 		}
@@ -149,6 +157,6 @@ www.{$SITE_DOMAIN} {
 		header Content-Type "text/html; charset=utf-8"
 		header Cache-Control "no-store"
 		header Retry-After "30"
-		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>oojam · back soon</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#faf8f5;color:#222}main{max-width:28rem;padding:24px;text-align:center}p{color:#666;line-height:1.5}@media (prefers-color-scheme:dark){body{background:#151413;color:#eee}p{color:#aaa}}</style></head><body><main><h1>build.oojam.dev is restarting</h1><p>It should be back in a minute. Your wallet and votes are safe.</p></main></body></html>` 503
+		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>oojam · back soon</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#faf8f5;color:#222}main{max-width:28rem;padding:24px;text-align:center}p{color:#666;line-height:1.5}@media (prefers-color-scheme:dark){body{background:#151413;color:#eee}p{color:#aaa}}</style></head><body><main><h1>build.oojam.dev is restarting</h1><p>It should be back in a minute. Your votes are safe.</p></main></body></html>` 503
 	}
 }

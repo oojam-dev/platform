@@ -2,36 +2,44 @@
 import { desc, eq, sql } from "drizzle-orm";
 
 import type { DbOrTx } from "../db/client.js";
-import { auditLog, builds, fundEntries, ideas, users, walletEntries } from "../db/schema.js";
+import { auditLog, builds, fundEntries, ideas, users } from "../db/schema.js";
 
 export interface FundSummary {
-  buildBalanceCents: number;
-  hostingBalanceCents: number;
-  committedCents: number;
+  balanceCents: number;
+  contributedCents: number;
   buildSpendCents: number;
   screeningCents: number;
-  walletsOutstandingCents: number;
+  adjustmentsCents: number;
 }
 
 export async function fundSummary(db: DbOrTx): Promise<FundSummary> {
+  const sum = (kind: string) => sql<number>`coalesce(sum(${fundEntries.deltaCents}) filter (where ${fundEntries.kind} = ${kind}), 0)::int`;
   const [f] = await db
     .select({
-      build: sql<number>`coalesce(sum(${fundEntries.deltaCents}) filter (where ${fundEntries.account} = 'build'), 0)::int`,
-      hosting: sql<number>`coalesce(sum(${fundEntries.deltaCents}) filter (where ${fundEntries.account} = 'hosting'), 0)::int`,
-      committed: sql<number>`coalesce(sum(${fundEntries.deltaCents}) filter (where ${fundEntries.kind} = 'commit'), 0)::int`,
-      spend: sql<number>`coalesce(-sum(${fundEntries.deltaCents}) filter (where ${fundEntries.kind} = 'build_spend'), 0)::int`,
-      screening: sql<number>`coalesce(-sum(${fundEntries.deltaCents}) filter (where ${fundEntries.kind} = 'screening'), 0)::int`,
+      balance: sql<number>`coalesce(sum(${fundEntries.deltaCents}), 0)::int`,
+      contributed: sum("contribution"),
+      spend: sum("build_spend"),
+      screening: sum("screening"),
+      adjustments: sum("adjustment"),
     })
     .from(fundEntries);
-  const [w] = await db.select({ cents: sql<number>`coalesce(sum(${walletEntries.deltaCents}), 0)::int` }).from(walletEntries);
   return {
-    buildBalanceCents: f?.build ?? 0,
-    hostingBalanceCents: f?.hosting ?? 0,
-    committedCents: f?.committed ?? 0,
-    buildSpendCents: f?.spend ?? 0,
-    screeningCents: f?.screening ?? 0,
-    walletsOutstandingCents: w?.cents ?? 0,
+    balanceCents: f?.balance ?? 0,
+    contributedCents: f?.contributed ?? 0,
+    buildSpendCents: -(f?.spend ?? 0),
+    screeningCents: -(f?.screening ?? 0),
+    adjustmentsCents: f?.adjustments ?? 0,
   };
+}
+
+/** Recent contributions, newest first (public). */
+export async function listContributions(db: DbOrTx, limit = 50) {
+  return db
+    .select({ id: fundEntries.id, cents: fundEntries.deltaCents, source: fundEntries.source, note: fundEntries.note, createdAt: fundEntries.createdAt })
+    .from(fundEntries)
+    .where(eq(fundEntries.kind, "contribution"))
+    .orderBy(desc(fundEntries.createdAt))
+    .limit(limit);
 }
 
 export async function listBuilds(db: DbOrTx, limit = 60) {
@@ -76,14 +84,5 @@ export async function listAudit(db: DbOrTx, limit = 200) {
     .from(auditLog)
     .leftJoin(users, eq(users.id, auditLog.actorId))
     .orderBy(desc(auditLog.createdAt))
-    .limit(limit);
-}
-
-export async function walletHistory(db: DbOrTx, userId: number, limit = 100) {
-  return db
-    .select()
-    .from(walletEntries)
-    .where(eq(walletEntries.userId, userId))
-    .orderBy(desc(walletEntries.createdAt))
     .limit(limit);
 }

@@ -12,8 +12,9 @@ export const meta: Route.MetaFunction = () => [{ title: "Rules · oojam build" }
 export async function loader() {
   return {
     rules: POLICY_RULES,
-    maxVotes: config.maxVotesPerUserPerIdea,
-    share: config.buildFundShare,
+    maxIdeas: config.maxIdeasPerDay,
+    maxAttempts: config.maxPostAttemptsPerDay,
+    sponsorUrl: config.sponsorUrl,
     capUsd: config.buildBudgetCapUsd,
     minUsd: config.buildBudgetMinUsd,
     minAccountAge: config.minGithubAccountAgeDays,
@@ -32,11 +33,12 @@ function Section({ id, title, children }: { id: string; title: string; children:
 }
 
 export default function Rules({ loaderData }: Route.ComponentProps) {
-  const { rules, maxVotes, share, capUsd, minUsd, minAccountAge } = loaderData;
-  const pct = Math.round(share * 100);
+  const { rules, maxIdeas, maxAttempts, sponsorUrl, capUsd, minUsd, minAccountAge } = loaderData;
+  const oneIdea = maxIdeas === 1 ? "one idea" : `${maxIdeas} ideas`;
   const toc = [
     ["voting", "Ideas & voting"],
-    ["money", "Money & refunds"],
+    ["money", "Money & sponsorship"],
+    ["limits", "Why the limits"],
     ["policy", "Content policy"],
     ["guardrails", "Guardrails"],
     ["open", "Open source"],
@@ -65,57 +67,69 @@ export default function Rules({ loaderData }: Route.ComponentProps) {
         <Section id="voting" title="Ideas & voting">
           <ul className="list-disc space-y-2 pl-5">
             <li>
-              <strong>Posting an idea costs $1</strong>, which also casts your first vote for it. Titles are 8–120
-              characters; descriptions up to 4,000 characters of Markdown.
+              <strong>Voting is free.</strong> Vote for as many ideas as you like, one vote per idea. Changed your mind?
+              Take your vote back any time before the idea is frozen.
             </li>
             <li>
-              <strong>Each vote costs $1.</strong> You can put at most <strong>{maxVotes} votes</strong> on any one idea.
-              Votes can't be withdrawn.
+              <strong>Post {oneIdea} a day.</strong> Posting counts as your vote for it. Titles are 8–120 characters;
+              descriptions up to 4,000 characters of Markdown.
             </li>
-            <li>
-              Ideas stay on the board until they're built. The board ranks by votes; ties go to the older idea.
-            </li>
+            <li>Ideas stay on the board until they're built. The board ranks by votes; ties go to the older idea.</li>
             <li>
               <strong>Every day at 00:00 UTC</strong>, the top idea is frozen and built by Claude. If it passes the
               guardrails and the repo's own checks, it's merged and deployed to oojam.dev automatically — no human in
               the loop.
             </li>
             <li>
-              Signing in uses GitHub. Accounts must be at least {minAccountAge} days old. Comments are free for anyone
-              who has topped up at least once.
+              <strong>Votes are public.</strong> Each idea lists who voted for it, and whose share link brought them.
             </li>
+            <li>Anyone signed in can comment. Be kind; suggest, don't demand.</li>
           </ul>
         </Section>
 
-        <Section id="money" title="Money & refunds">
+        <Section id="money" title="Money & sponsorship">
           <ul className="list-disc space-y-2 pl-5">
             <li>
-              Top up your wallet with Stripe ($5, $10, $25 or any whole amount from $5 to $500). <strong>1 credit = $1.</strong>
+              <strong>oojam takes no payments.</strong> There's nothing to buy: no credits, no boosts, no premium votes.
+              It's just a bit of fun.
             </li>
             <li>
-              When you post or vote, that dollar is <strong>committed</strong>: {pct}% goes to the build fund and{" "}
-              {100 - pct}% to hosting. See it all on{" "}
+              The only real cost is Claude doing the building. That's paid from the{" "}
               <Link to="/fund" className="link">
-                /fund
+                build fund
               </Link>
-              .
+              : Anthropic credits donated by{" "}
+              <a href={sponsorUrl} target="_blank" rel="noopener" className="link">
+                sponsors
+              </a>{" "}
+              and the maintainers.
             </li>
             <li>
-              <strong>Committed credits are non-refundable.</strong> The one exception: if screening rejects your idea when
-              you post it, the $1 goes straight back to your wallet.
+              <strong>Sponsorship only funds builds. It never buys votes</strong>, ranking, or a say in what gets built.
             </li>
             <li>
-              An idea that was voted to the top but is rejected at the pre-build screen isn't refunded — it was the
-              community's choice, and the runner-up is built instead.
+              Each build is capped at {money(capUsd * 100)}. If the fund is below {money(minUsd * 100)}, the day is skipped
+              and the idea stays on the board.
             </li>
-            <li>Uncommitted credit never expires. It isn't refundable as cash, except at an admin's discretion (logged publicly).</li>
+            <li>Every contribution and every build's cost is public on /fund.</li>
+          </ul>
+        </Section>
+
+        <Section id="limits" title="Why the limits">
+          <ul className="list-disc space-y-2 pl-5">
             <li>
-              <strong>Disputing a card payment freezes the account</strong> pending review, and any unspent credit is
-              frozen with it.
+              <strong>One vote per idea</strong> means the board reflects how many people want something, not how hard
+              one person clicks.
             </li>
             <li>
-              Each build's budget is the fund balance capped at {money(capUsd * 100)}. Below {money(minUsd * 100)} the day is
-              skipped.
+              <strong>{oneIdea === "one idea" ? "One idea a day" : `${maxIdeas} ideas a day`}</strong> (and {maxAttempts}{" "}
+              attempts, counting ideas screening rejects) keeps the board readable and the screening bill small —
+              screening is paid from the build fund.
+            </li>
+            <li>
+              <strong>GitHub accounts must be at least {minAccountAge} days old.</strong> Votes are free, so the only thing
+              stopping someone from voting a hundred times is that making a hundred real accounts is a chore. Admins ban
+              obvious sock puppets, publicly.
             </li>
           </ul>
         </Section>

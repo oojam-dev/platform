@@ -1,7 +1,6 @@
 /** Display helpers shared by server and client. Dates are formatted in UTC so SSR and hydration agree. */
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-const usdWhole = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 /** 123456 → "$1,234.56"; -250 → "−$2.50". */
 export function money(cents: number): string {
@@ -9,13 +8,7 @@ export function money(cents: number): string {
   return cents < 0 ? `−${s}` : s;
 }
 
-/** Spendable credits: whole dollars, rounded down. 1299 → "$12". */
-export function credits(cents: number): string {
-  const whole = Math.floor(Math.max(0, cents) / 100);
-  return usdWhole.format(whole);
-}
-
-/** Signed money for ledgers: "+$5.00", "−$1.00". */
+/** Signed money for adjustments: "+$5.00", "−$1.00". */
 export function signedMoney(cents: number): string {
   return cents > 0 ? `+${money(cents)}` : money(cents);
 }

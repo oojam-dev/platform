@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Form, Link, data, redirect, useNavigation } from "react-router";
 
 import { screenAndApply } from "../../src/core/ideas.js";
-import { BODY_MAX, LedgerError, TITLE_MAX, TITLE_MIN, postIdea, walletBalance } from "../../src/core/ledger.js";
+import { config } from "../../src/core/config.js";
+import { RuleError } from "../../src/core/errors.js";
+import { BODY_MAX, TITLE_MAX, TITLE_MIN, postIdea, postsToday } from "../../src/core/votes.js";
 import { getDb } from "../../src/db/client.js";
 import { BackLink, CsrfInput, Notice, PageTitle } from "../components/ui";
-import { credits } from "../lib/format";
 import { requireMutation, requireUser } from "../lib/session.server";
 import type { Route } from "./+types/ideas.new";
 
@@ -13,8 +14,15 @@ export const meta: Route.MetaFunction = () => [{ title: "Post an idea · oojam b
 
 export async function loader({ request }: Route.LoaderArgs) {
   const user = await requireUser(request);
-  const balanceCents = await walletBalance(getDb(), user.id);
-  return { balanceCents, banned: Boolean(user.bannedAt) };
+  const db = getDb();
+  const today = await postsToday(db, user.id);
+  return {
+    postedToday: today.posts,
+    attemptsToday: today.attempts,
+    maxIdeas: config.maxIdeasPerDay,
+    maxAttempts: config.maxPostAttemptsPerDay,
+    banned: Boolean(user.bannedAt),
+  };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -27,7 +35,7 @@ export async function action({ request }: Route.ActionArgs) {
     const idea = await postIdea(db, user.id, { title, body });
     ideaId = idea.id;
   } catch (error) {
-    if (error instanceof LedgerError) return data({ error: error.message, title, body }, { status: 400 });
+    if (error instanceof RuleError) return data({ error: error.message, title, body }, { status: 400 });
     throw error;
   }
   // Screening takes a few seconds. If it fails (API down), the idea stays "Screening…" and
@@ -46,34 +54,38 @@ function Counter({ n, min, max }: { n: number; min?: number; max: number }) {
 }
 
 export default function NewIdea({ loaderData, actionData }: Route.ComponentProps) {
-  const { balanceCents, banned } = loaderData;
+  const { postedToday, attemptsToday, maxIdeas, maxAttempts, banned } = loaderData;
   const [title, setTitle] = useState(actionData?.title ?? "");
   const [body, setBody] = useState(actionData?.body ?? "");
   const nav = useNavigation();
   const submitting = nav.state === "submitting" && nav.formMethod === "POST";
-  const broke = balanceCents < 100;
+  const limitReached = postedToday >= maxIdeas || attemptsToday >= maxAttempts;
+  const blocked = banned || limitReached;
   const titleLen = title.replace(/\s+/g, " ").trim().length;
 
   return (
     <div className="mx-auto max-w-2xl">
       <BackLink to="/">The board</BackLink>
-      <PageTitle kicker="Post an idea · $1" title="What should oojam.dev become next?">
+      <PageTitle kicker="Post an idea · free" title="What should oojam.dev become next?">
         Describe one thing that could be built in a day. If it reaches the top of the board at 00:00&nbsp;UTC, Claude
-        builds it and it goes live. Posting costs <strong className="text-ink">$1</strong>, which also counts as your
-        first vote.
+        builds it and it goes live. It's free: you can post {maxIdeas === 1 ? "one idea" : `${maxIdeas} ideas`} a day,
+        and posting counts as your vote for it.
       </PageTitle>
 
       {banned ? (
         <Notice tone="warn" title="Your account is suspended.">
           Suspended accounts can't post ideas.
         </Notice>
-      ) : broke ? (
-        <Notice tone="jam" title={`You have ${credits(balanceCents)} in your wallet.`} className="mb-8">
-          Posting needs $1 of credit.{" "}
-          <Link to="/wallet" className="font-bold underline">
-            Top up your wallet
-          </Link>{" "}
-          — from $5 — and come back.
+      ) : limitReached ? (
+        <Notice tone="jam" title="You've posted today's idea." className="mb-8">
+          {attemptsToday >= maxAttempts && postedToday < maxIdeas
+            ? "That's enough attempts for today, too. "
+            : ""}
+          You can post again after 00:00 UTC. Meanwhile,{" "}
+          <Link to="/" className="font-bold underline">
+            vote on the board
+          </Link>
+          .
         </Notice>
       ) : null}
 
@@ -139,17 +151,17 @@ export default function NewIdea({ loaderData, actionData }: Route.ComponentProps
             <Link to="/rules" className="link">
               content policy
             </Link>
-            . If it's out of policy, it's rejected with a reason and your $1 goes straight back to your wallet. Once
-            listed, committed dollars are non-refundable.
+            . If it's out of policy, it's rejected with a reason, and a rejection doesn't count as
+            today's idea (you get {maxAttempts} tries a day).
           </p>
         </div>
 
         <div className="flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-ink-3">
-            Wallet: <span className="num font-semibold text-ink">{credits(balanceCents)}</span>
+            Ideas left today: <span className="num font-semibold text-ink">{Math.max(0, maxIdeas - postedToday)}</span>
           </p>
-          <button type="submit" className="btn btn-jam px-6 py-3 text-base" disabled={broke || banned || submitting}>
-            {submitting ? "Posting & screening…" : "Post for $1"}
+          <button type="submit" className="btn btn-jam px-6 py-3 text-base" disabled={blocked || submitting}>
+            {submitting ? "Posting & screening…" : "Post idea"}
           </button>
         </div>
       </Form>

@@ -89,17 +89,15 @@ Branch protection on `oojam-dev/oojam` `main` (Settings → Branches, or a rules
 - Block force pushes and deletions. Restrict who can push to `main` to maintainers and the App.
 - Squash merging allowed.
 
-### 5. Stripe
+### 5. Sponsorship (optional)
 
-Dashboard (live mode) → Developers:
-- API keys → a **restricted** or secret key → `STRIPE_SECRET_KEY` (`sk_live_…`).
-- Webhooks → Add endpoint `https://build.oojam.dev/stripe/webhook`, events (SPEC §6.5):
-  - `checkout.session.completed`
-  - `checkout.session.async_payment_succeeded`
-  - `checkout.session.async_payment_failed`
-  - `charge.dispute.created`
+oojam takes no payments. Voting is free; builds are paid for from the build fund, which the
+maintainers and sponsors top up.
 
-  Its signing secret (`whsec_…`) → `STRIPE_WEBHOOK_SECRET`.
+- Enable GitHub Sponsors for the `oojam-dev` org (github.com/sponsors). `.github/FUNDING.yml` in both
+  repos already points at it, and `SPONSOR_URL` sets where the "Sponsor" links on both sites go.
+- When money goes into the Anthropic account for oojam, record it in `/admin` → **Record a
+  contribution**, so `/fund` stays accurate. Sponsorship never buys votes.
 
 ### 6. Anthropic
 
@@ -227,10 +225,8 @@ first, stops what uses it (platform: web + worker; site: worker + the live site 
 database, `pg_restore --create`s the dump (which brings back the grants and per-role settings), re-applies
 the guards, and starts everything again. If `pg_restore` fails it says how to put the saved copy back.
 
-Restoring the platform DB rewinds wallets, votes and ideas: any Stripe payment after the dump's time must
-be re-credited. Check Stripe's dashboard (payments since the dump) against `topups` and use admin wallet
-adjustments, or resend those events from the Stripe dashboard (the webhook's idempotency table,
-`stripe_events`, was rewound with everything else, so resent events apply once).
+Restoring the platform DB rewinds votes, ideas and the fund ledger to the dump's time; re-record any
+contributions made since, from `/transparency`.
 
 **Test a restore** every few months: `bin/restore` on a staging box, or restore into a scratch container:
 ```sh
@@ -243,7 +239,7 @@ docker rm -f restore-test
 ## Pausing the system
 
 - **Normal**: `/admin` → Pause (with a reason). No freeze, build, merge or deploy happens; a banner shows on
-  both sites. Voting and top-ups keep working. Resume from the same page.
+  both sites. Voting keeps working. Resume from the same page.
 - **Hard stop of the cycle** (admin UI unavailable, or something is going wrong right now):
   ```sh
   docker compose stop worker
@@ -254,7 +250,7 @@ docker rm -f restore-test
 - **Stop spending**: revoke the Anthropic key in the console (the gateway, screening and review fail
   closed).
 - **Take build.oojam.dev offline** (keeps the site): `docker compose stop platform-web` (Caddy shows a
-  "restarting" page). Stripe retries webhooks for up to 3 days.
+  "restarting" page).
 
 ## Rolling back the site
 
@@ -282,8 +278,6 @@ After editing `.env`, `docker compose up -d` recreates exactly the services whos
 | `SESSION_SECRET` | New value (`openssl rand -hex 32`), `up -d`. Everyone is signed out. |
 | `GATEWAY_ADMIN_TOKEN` | New value; do it between cycles (in-flight build tokens die with the gateway restart). |
 | `ANTHROPIC_API_KEY` | New key in the console, update `.env`, `up -d`, revoke the old key. |
-| `STRIPE_SECRET_KEY` | Roll in the Stripe dashboard (it can keep the old key alive for a while), update, `up -d`. |
-| `STRIPE_WEBHOOK_SECRET` | Roll the endpoint's secret in Stripe (with an overlap period), update, `up -d`. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | Generate a second secret, update, `up -d`, delete the old one. |
 | GitHub App key | Generate a new key, replace `secrets/github-app.pem`, `docker compose restart worker`, delete the old key on GitHub. |
 | `PLATFORM_APP_PASSWORD`, `PLATFORM_OWNER_PASSWORD`, `BACKUP_DB_PASSWORD` | See below; then `up -d`. |
@@ -302,7 +296,7 @@ docker compose up -d
 ## Incident checklist
 
 1. **Stop the bleeding.** Pause in `/admin`, or hard-stop the worker (above). If money or keys are
-   involved: revoke the Anthropic key, roll the Stripe key, suspend the GitHub App installation
+   involved: revoke the Anthropic key, suspend the GitHub App installation
    (GitHub → org settings → Installed GitHub Apps → Suspend).
 2. **Preserve evidence** before changing things: `docker compose logs --since 48h > /opt/oojam/data/incident-$(date -u +%F).log`,
    `docker ps -a`, `docker inspect` of suspicious containers, `docker compose exec backup backup.sh now`.

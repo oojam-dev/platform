@@ -4,10 +4,10 @@ import { Notice } from "~/components/ui";
 
 /** Messages for the no-JavaScript vote flow, which redirects back with ?vote=<code>. */
 const MESSAGES: Record<string, { tone: "ok" | "warn"; text: string }> = {
-  ok: { tone: "ok", text: "Vote counted. Thanks for chipping in $1." },
-  insufficient_funds: { tone: "warn", text: "You need at least $1 of credit. Top up your wallet first." },
+  ok: { tone: "ok", text: "Vote counted." },
+  removed: { tone: "ok", text: "Vote taken back." },
   banned: { tone: "warn", text: "This account is suspended." },
-  vote_cap: { tone: "warn", text: "You've already put the maximum votes on that idea." },
+  vote_cap: { tone: "warn", text: "You've already voted for that idea." },
   idea_closed: { tone: "warn", text: "That idea isn't taking votes any more." },
   not_found: { tone: "warn", text: "That idea doesn't exist." },
   invalid: { tone: "warn", text: "That vote didn't go through." },

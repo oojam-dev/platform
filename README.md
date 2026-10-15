@@ -1,7 +1,7 @@
 # oojam platform
 
 The machine behind [oojam.dev](https://oojam.dev), a website with no designated purpose:
-- people commit dollars on [build.oojam.dev](https://build.oojam.dev) to post and upvote ideas;
+- people post ideas at [build.oojam.dev](https://build.oojam.dev) and share them to get votes (one per GitHub account);
 - every day at 00:00 UTC the top idea is frozen;
 - Claude builds it into the open-source site ([oojam-dev/oojam](https://github.com/oojam-dev/oojam));
 - the change passes guardrails, is merged as a PR, and is deployed.
@@ -12,8 +12,8 @@ The machine behind [oojam.dev](https://oojam.dev), a website with no designated 
 
 | Path | What |
 |---|---|
-| `app/` | build.oojam.dev: the board, ideas, votes, wallet, fund, rules, admin (React Router v7). |
-| `src/core/` | Domain logic: the ledger (money), ideas and screening, auth, Stripe, controls, policy. |
+| `app/` | build.oojam.dev: the board, ideas, votes, fund, rules, admin (React Router v7). |
+| `src/core/` | Domain logic: votes, the build fund, ideas and screening, auth, controls, policy. |
 | `src/db/` | Drizzle schema and client for the `platform` database; migrations in `drizzle/`. |
 | `src/guardrails/` | Host-side checks on every build: protected paths, additive-only migrations, dependency vetting, secrets, code patterns, and the independent Claude review. |
 | `src/gateway/` | Anthropic API proxy. Builders get a per-build token, never the key, and their spend is metered and capped. |
@@ -38,7 +38,7 @@ npm run db:migrate
 SESSION_SECRET=dev PLATFORM_URL=http://localhost:3000 npm run dev
 ```
 
-Tests (money and ledger tests need a Postgres you can create databases on):
+Tests (vote and fund tests need a Postgres you can create databases on):
 
 ```bash
 TEST_DATABASE_URL=postgres://postgres:dev@localhost:55432/postgres npm test
@@ -60,6 +60,11 @@ deploy.
 ## Deploying
 
 See [`deploy/README.md`](deploy/README.md) and [`infra/terraform/README.md`](infra/terraform/README.md).
+
+## Sponsoring
+
+oojam runs on donated Anthropic credits. [Sponsor it](https://github.com/sponsors/oojam-dev): the money
+pays for builds and never buys votes.
 
 ## Licence
 

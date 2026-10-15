@@ -44,9 +44,9 @@ x-core-env: &core-env
   SITE_URL: ${SITE_URL:-https://${SITE_DOMAIN:?SITE_DOMAIN must be set}}
   DATABASE_URL: postgres://platform_app:${PLATFORM_APP_PASSWORD:?PLATFORM_APP_PASSWORD must be set}@postgres:5432/platform
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-  BUILD_FUND_SHARE: ${BUILD_FUND_SHARE:-0.8}
-  MAX_VOTES_PER_USER_PER_IDEA: ${MAX_VOTES_PER_USER_PER_IDEA:-10}
-  BUILD_BUDGET_CAP_USD: ${BUILD_BUDGET_CAP_USD:-25}
+  MAX_IDEAS_PER_DAY: ${MAX_IDEAS_PER_DAY:-1}
+  SPONSOR_URL: ${SPONSOR_URL:-https://github.com/sponsors/oojam-dev}
+  BUILD_BUDGET_CAP_USD: ${BUILD_BUDGET_CAP_USD:-10}
   BUILD_BUDGET_MIN_USD: ${BUILD_BUDGET_MIN_USD:-3}
   CYCLE_CRON: ${CYCLE_CRON:-0 0 * * *}
 
@@ -169,8 +169,6 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       SCREEN_MODEL: ${SCREEN_MODEL:-claude-opus-5-5}
       MIN_GITHUB_ACCOUNT_AGE_DAYS: ${MIN_GITHUB_ACCOUNT_AGE_DAYS:-30}
     networks:
@@ -369,7 +367,7 @@ networks:
   edge:
     name: oojam_edge
     enable_ipv6: true
-  # Outbound internet for the services that need it (Stripe, GitHub,
+  # Outbound internet for the services that need it (GitHub,
   # Anthropic, npm through squid, S3).
   outbound:
     name: oojam_outbound

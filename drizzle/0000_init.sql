@@ -20,6 +20,8 @@ CREATE TABLE "builds" (
 	"pr_number" integer,
 	"pr_url" text,
 	"merge_sha" text,
+	"active_token" text,
+	"skipped_idea_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"gate_report" text,
 	"summary" text,
 	"error" text,
@@ -58,11 +60,11 @@ CREATE TABLE "deployments" (
 --> statement-breakpoint
 CREATE TABLE "fund_entries" (
 	"id" bigserial PRIMARY KEY NOT NULL,
-	"account" text NOT NULL,
 	"delta_cents" integer NOT NULL,
 	"kind" text NOT NULL,
-	"wallet_entry_id" bigint,
+	"source" text,
 	"build_id" bigint,
+	"actor_id" bigint,
 	"note" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -82,6 +84,13 @@ CREATE TABLE "ideas" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "ref_visits" (
+	"id" bigserial PRIMARY KEY NOT NULL,
+	"idea_id" bigint,
+	"referrer_id" bigint NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "sessions" (
 	"id" text PRIMARY KEY NOT NULL,
 	"user_id" bigint NOT NULL,
@@ -89,23 +98,12 @@ CREATE TABLE "sessions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "stripe_events" (
-	"id" text PRIMARY KEY NOT NULL,
-	"type" text NOT NULL,
-	"received_at" timestamp with time zone DEFAULT now() NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "topups" (
+CREATE TABLE "shares" (
 	"id" bigserial PRIMARY KEY NOT NULL,
-	"user_id" bigint NOT NULL,
-	"stripe_checkout_id" text,
-	"stripe_payment_intent" text,
-	"amount_cents" integer NOT NULL,
-	"status" text DEFAULT 'pending' NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"paid_at" timestamp with time zone,
-	CONSTRAINT "topups_stripe_checkout_id_unique" UNIQUE("stripe_checkout_id"),
-	CONSTRAINT "topups_amount_check" CHECK ("topups"."amount_cents" > 0)
+	"idea_id" bigint NOT NULL,
+	"user_id" bigint,
+	"channel" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
@@ -118,6 +116,7 @@ CREATE TABLE "users" (
 	"is_admin" boolean DEFAULT false NOT NULL,
 	"banned_at" timestamp with time zone,
 	"banned_reason" text,
+	"referred_by" bigint,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "users_github_id_unique" UNIQUE("github_id")
 );
@@ -126,19 +125,7 @@ CREATE TABLE "votes" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"idea_id" bigint NOT NULL,
 	"user_id" bigint NOT NULL,
-	"wallet_entry_id" bigint NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "votes_wallet_entry_id_unique" UNIQUE("wallet_entry_id")
-);
---> statement-breakpoint
-CREATE TABLE "wallet_entries" (
-	"id" bigserial PRIMARY KEY NOT NULL,
-	"user_id" bigint NOT NULL,
-	"delta_cents" integer NOT NULL,
-	"kind" text NOT NULL,
-	"topup_id" bigint,
-	"idea_id" bigint,
-	"note" text,
+	"referrer_id" bigint,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -148,27 +135,30 @@ ALTER TABLE "comments" ADD CONSTRAINT "comments_idea_id_ideas_id_fk" FOREIGN KEY
 ALTER TABLE "comments" ADD CONSTRAINT "comments_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "controls" ADD CONSTRAINT "controls_updated_by_users_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deployments" ADD CONSTRAINT "deployments_build_id_builds_id_fk" FOREIGN KEY ("build_id") REFERENCES "public"."builds"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "fund_entries" ADD CONSTRAINT "fund_entries_wallet_entry_id_wallet_entries_id_fk" FOREIGN KEY ("wallet_entry_id") REFERENCES "public"."wallet_entries"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "fund_entries" ADD CONSTRAINT "fund_entries_actor_id_users_id_fk" FOREIGN KEY ("actor_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "ideas" ADD CONSTRAINT "ideas_author_id_users_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ref_visits" ADD CONSTRAINT "ref_visits_idea_id_ideas_id_fk" FOREIGN KEY ("idea_id") REFERENCES "public"."ideas"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ref_visits" ADD CONSTRAINT "ref_visits_referrer_id_users_id_fk" FOREIGN KEY ("referrer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "topups" ADD CONSTRAINT "topups_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "shares" ADD CONSTRAINT "shares_idea_id_ideas_id_fk" FOREIGN KEY ("idea_id") REFERENCES "public"."ideas"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "shares" ADD CONSTRAINT "shares_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "votes" ADD CONSTRAINT "votes_idea_id_ideas_id_fk" FOREIGN KEY ("idea_id") REFERENCES "public"."ideas"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "votes" ADD CONSTRAINT "votes_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "votes" ADD CONSTRAINT "votes_wallet_entry_id_wallet_entries_id_fk" FOREIGN KEY ("wallet_entry_id") REFERENCES "public"."wallet_entries"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "wallet_entries" ADD CONSTRAINT "wallet_entries_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "wallet_entries" ADD CONSTRAINT "wallet_entries_topup_id_topups_id_fk" FOREIGN KEY ("topup_id") REFERENCES "public"."topups"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "votes" ADD CONSTRAINT "votes_referrer_id_users_id_fk" FOREIGN KEY ("referrer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "audit_log_created_idx" ON "audit_log" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "builds_status_idx" ON "builds" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "comments_idea_idx" ON "comments" USING btree ("idea_id","created_at");--> statement-breakpoint
 CREATE INDEX "comments_user_idx" ON "comments" USING btree ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "deployments_status_idx" ON "deployments" USING btree ("status");--> statement-breakpoint
-CREATE INDEX "fund_entries_account_idx" ON "fund_entries" USING btree ("account");--> statement-breakpoint
+CREATE INDEX "fund_entries_kind_idx" ON "fund_entries" USING btree ("kind");--> statement-breakpoint
 CREATE INDEX "fund_entries_build_idx" ON "fund_entries" USING btree ("build_id");--> statement-breakpoint
 CREATE INDEX "ideas_board_idx" ON "ideas" USING btree ("status","vote_count","created_at");--> statement-breakpoint
 CREATE INDEX "ideas_author_idx" ON "ideas" USING btree ("author_id");--> statement-breakpoint
+CREATE INDEX "ref_visits_referrer_idx" ON "ref_visits" USING btree ("referrer_id");--> statement-breakpoint
+CREATE INDEX "ref_visits_created_idx" ON "ref_visits" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "sessions_user_idx" ON "sessions" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "topups_user_idx" ON "topups" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "topups_payment_intent_idx" ON "topups" USING btree ("stripe_payment_intent");--> statement-breakpoint
-CREATE INDEX "votes_idea_user_idx" ON "votes" USING btree ("idea_id","user_id");--> statement-breakpoint
-CREATE INDEX "wallet_entries_user_idx" ON "wallet_entries" USING btree ("user_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "wallet_entries_topup_once" ON "wallet_entries" USING btree ("topup_id") WHERE "wallet_entries"."kind" = 'topup';
+CREATE INDEX "shares_idea_idx" ON "shares" USING btree ("idea_id");--> statement-breakpoint
+CREATE INDEX "shares_created_idx" ON "shares" USING btree ("created_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "votes_idea_user_key" ON "votes" USING btree ("idea_id","user_id");--> statement-breakpoint
+CREATE INDEX "votes_user_idx" ON "votes" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "votes_referrer_idx" ON "votes" USING btree ("referrer_id");

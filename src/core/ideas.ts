@@ -2,9 +2,11 @@
 import { and, asc, desc, eq, gte, inArray, isNull, notInArray, sql } from "drizzle-orm";
 
 import type { Database, DbOrTx } from "../db/client.js";
-import { builds, comments, fundEntries, ideas, users, votes, type IdeaStatus } from "../db/schema.js";
+import { builds, comments, ideas, users, votes, type IdeaStatus } from "../db/schema.js";
 import { audit } from "./controls.js";
-import { LedgerError, hasPaidTopup, rejectAndRefundPost } from "./ledger.js";
+import { RuleError } from "./errors.js";
+import { chargeScreening } from "./fund.js";
+import { rejectAtScreening } from "./votes.js";
 import { usdToCents } from "./pricing.js";
 import { screenIdea } from "./screen.js";
 
@@ -112,8 +114,8 @@ export async function getIdea(db: DbOrTx, id: number, viewerId?: number) {
 }
 
 /**
- * Screens a freshly posted idea. Allowed → it appears on the board. Rejected → the credit
- * is refunded. If the API fails, the idea stays unscreened and the worker retries later.
+ * Screens a freshly posted idea. Allowed → it appears on the board. Rejected → the author
+ * gets their vote back. If the API fails, the idea stays unscreened and the worker retries later.
  */
 export async function screenAndApply(db: Database, ideaId: number): Promise<"allowed" | "rejected" | "error"> {
   const [idea] = await db.select().from(ideas).where(eq(ideas.id, ideaId));
@@ -126,18 +128,12 @@ export async function screenAndApply(db: Database, ideaId: number): Promise<"all
     console.error(`screen: idea ${ideaId} failed:`, error);
     return "error";
   }
-  await db.insert(fundEntries).values({
-    account: "hosting",
-    deltaCents: -usdToCents(result.costUsd),
-    kind: "screening",
-    note: `Screening idea ${ideaId}`,
-  });
+  await chargeScreening(db, usdToCents(result.costUsd), `Screening idea ${ideaId}`);
   if (result.verdict.allowed) {
     await db.update(ideas).set({ screenVerdict: result.verdict }).where(and(eq(ideas.id, ideaId), isNull(ideas.screenVerdict)));
     return "allowed";
   }
-  await rejectAndRefundPost(db, ideaId, result.verdict.reason);
-  await db.update(ideas).set({ screenVerdict: result.verdict }).where(eq(ideas.id, ideaId));
+  await rejectAtScreening(db, ideaId, result.verdict);
   await audit(db, null, "screen_reject", `idea:${ideaId}`, { category: result.verdict.category, reason: result.verdict.reason });
   return "rejected";
 }
@@ -159,22 +155,19 @@ const COMMENTS_PER_WINDOW = 5;
 
 export async function addComment(db: Database, userId: number, ideaId: number, raw: string) {
   const body = raw.replace(/\r\n/g, "\n").trim();
-  if (!body) throw new LedgerError("invalid", "Say something.");
-  if (body.length > COMMENT_MAX) throw new LedgerError("invalid", `Comments are at most ${COMMENT_MAX} characters.`);
+  if (!body) throw new RuleError("invalid", "Say something.");
+  if (body.length > COMMENT_MAX) throw new RuleError("invalid", `Comments are at most ${COMMENT_MAX} characters.`);
   const [user] = await db.select().from(users).where(eq(users.id, userId));
-  if (!user || user.bannedAt) throw new LedgerError("banned", "This account is suspended.");
-  if (!(await hasPaidTopup(db, userId))) {
-    throw new LedgerError("invalid", "Commenting opens up once you've topped up your wallet.");
-  }
+  if (!user || user.bannedAt) throw new RuleError("banned", "This account is suspended.");
   const [idea] = await db.select().from(ideas).where(eq(ideas.id, ideaId));
-  if (!idea || idea.hiddenAt) throw new LedgerError("not_found", "No such idea.");
+  if (!idea || idea.hiddenAt) throw new RuleError("not_found", "No such idea.");
   const since = new Date(Date.now() - COMMENT_WINDOW_MIN * 60_000);
   const [recent] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(comments)
     .where(and(eq(comments.userId, userId), gte(comments.createdAt, since)));
   if ((recent?.n ?? 0) >= COMMENTS_PER_WINDOW) {
-    throw new LedgerError("invalid", "You're commenting a lot. Take a breath and try again in a few minutes.");
+    throw new RuleError("invalid", "You're commenting a lot. Take a breath and try again in a few minutes.");
   }
   const [row] = await db.insert(comments).values({ ideaId, userId, body }).returning();
   return row!;

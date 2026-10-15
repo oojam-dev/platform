@@ -15,11 +15,11 @@ disagree, fix one of them in the same change.
 | Repo | Licence | What | Who changes it |
 |---|---|---|---|
 | `oojam-dev/oojam` (local: `../site`) | MIT | **The site**: oojam.dev. React Router v7, Tailwind v4, Drizzle, Postgres. | The **builder**, once a day, through guarded PRs. Maintainers in emergencies. |
-| `oojam-dev/platform` (this repo) | MIT | **The machine**: build.oojam.dev (accounts, Stripe, credits, ideas, votes), the daily cycle, the builder, guardrails, deploy, infra. | Maintainers only. **The builder never sees or touches it.** |
+| `oojam-dev/platform` (this repo) | MIT | **The machine**: build.oojam.dev (accounts, ideas, votes, the build fund), the daily cycle, the builder, guardrails, deploy, infra. | Maintainers only. **The builder never sees or touches it.** |
 
 The wall between them is the most important property of the system. If the builder
-could change voting, payments, or the guardrails, the community could buy its way past
-them ("give user X 10,000 credits"). So:
+could change voting or the guardrails, the community could vote its way past them
+("give user X unlimited votes"). So:
 
 - The builder only ever receives a fresh clone of `oojam-dev/oojam`.
 - Guardrails, the orchestrator and the deploy logic live here, run on the host, and judge
@@ -30,43 +30,50 @@ them ("give user X 10,000 credits"). So:
 
 ## 2. Product rules
 
-### 2.1 Money
+### 2.1 Votes and money
 
-- Currency **USD**. Accounts top up through **Stripe Checkout** in packs:
-  $5, $10, $25 or a custom amount from $5 to $500. Top-ups go into the user's **wallet**.
-- **1 credit = $1.** Wallet balances are held in cents but spent in whole credits.
-- **Committing** a credit (posting or voting) is when it's spent. It is split at that moment:
-  - `BUILD_FUND_SHARE` (default **80%**) to the **build fund**, which pays Anthropic for builds;
-  - the rest (default **20%**) to **hosting**, which covers Hetzner, Stripe fees and backups.
-- Committed credits are **non-refundable**, with one exception: if screening rejects an
-  idea at posting time, its $1 goes back to the poster's wallet.
-- Uncommitted wallet credit doesn't expire. It isn't refundable as cash except at an
-  admin's discretion, which is recorded as an `adjustment`.
-- Everything is public on `/fund`: total contributed, hosting share, build spend per build,
-  and the current fund balance.
+oojam takes **no payments**: it's a bit of fun, not a business.
+- Voting is free and tied to your GitHub account: **one vote per account per idea**, on as many
+  ideas as you like, and voters are public.
+- Builds are paid for from the **build fund**:
+  - money goes in as maintainer and sponsor **contributions**, which admins record;
+  - money comes out as **build spend** and **screening** costs.
+- Sponsorship goes through GitHub Sponsors (`SPONSOR_URL`). It **never buys votes**.
+- Everything is public on `/fund`: contributions, spend per build, and the balance.
 
-### 2.2 Ideas and votes
+### 2.2 Ideas, votes and sharing
 
-- **Posting** an idea costs 1 credit, which also casts the author's first vote for it.
-  Title: 8–120 chars. Body: 0–4,000 chars of Markdown, rendered safely (no raw HTML).
-- **Voting**: 1 credit = 1 vote. A user can put **at most `MAX_VOTES_PER_USER_PER_IDEA`
-  (default 10)** votes on any one idea. Votes can't be withdrawn.
-- **Ranking**: ideas stay on the board until they're built ("persist forever"). The board
-  sorts by `vote_count DESC, created_at ASC`, so ties go to the older idea. "New" sorts by
-  `created_at DESC`.
-- Ideas are **screened** by Claude at posting time against the content policy (§2.4). A
-  rejection refunds the credit and shows the reason.
-- Signed-in users who have ever topped up can **comment** on ideas (flat thread, 2,000 chars,
-  rate-limited). Comments are free.
+- **Posting** an idea is the author's vote for it. Each account may post **`MAX_IDEAS_PER_DAY` (1)**
+  idea per UTC day, and make at most 3 attempts, counting ideas rejected at screening. Title:
+  8–120 chars. Body: 0–4,000 chars of Markdown, rendered safely (no raw HTML).
+- **Voting**: one vote per GitHub account per idea. A vote can be taken back while the idea is
+  open. Every idea page shows who voted.
+- **Ranking**: ideas stay on the board until they're built. The board sorts by
+  `vote_count DESC, created_at ASC`, so ties go to the older idea. "New" sorts by `created_at DESC`.
+- Ideas are **screened** by Claude at posting time against the content policy (§2.4). A rejection
+  shows the reason and doesn't count towards the daily post limit.
+- **Sharing is the growth loop.** Getting an idea built means getting people to vote for it.
+  - Every idea has a share menu: the native share sheet, copy link, X, Bluesky, LinkedIn,
+    Reddit, Hacker News and email.
+  - Shared links carry `?ref=<github login>`. That records the visit, who referred a new account
+    (`users.referred_by`), and whose share each vote came through (`votes.referrer_id`).
+  - Idea pages show which shares brought voters. `/admin` shows shares by channel, referred
+    visits, sign-ups and votes, and the viral coefficient (sign-ups that came through a share,
+    per voter active in the window).
+  - Each idea has an Open Graph image, Twitter card tags, an oEmbed endpoint and a frameable
+    embed card, so a shared link previews well everywhere.
+- **Comments**: any signed-in, unbanned account can comment (flat thread, 2,000 chars,
+  rate-limited).
+- **Fake accounts** are kept out by GitHub sign-in with a minimum account age, plus admin bans.
 
 ### 2.3 The daily cycle (00:00 UTC)
 
 1. **Freeze.** The top `open` idea becomes `frozen` and its votes are locked.
-2. **Fund check.** The build budget is `min(fund balance, BUILD_BUDGET_CAP_USD = $25)`.
+2. **Fund check.** The build budget is `min(fund balance, BUILD_BUDGET_CAP_USD = $10)`.
    If it's below `BUILD_BUDGET_MIN_USD` ($3), the day is `skipped`, the idea goes back to
    `open`, and the board shows why.
 3. **Pre-build screen.** Claude screens the idea again with today's site in view. If it's
-   now out of policy, the idea is `rejected` (no refund, because it was voted through) and
+   now out of policy, the idea is `rejected` (votes aren't returned, because it was voted through) and
    the runner-up is frozen instead, up to 3 times.
 4. **Build.** The builder runs in a throwaway container (§4) for up to 2 attempts. The second
    attempt gets the first attempt's gate report as feedback.
@@ -141,7 +148,7 @@ One Hetzner Cloud VM runs a Docker Compose project called `oojam`, from `/opt/oo
 |---|---|---|---|
 | `caddy` | `caddy:2` | `edge`, `site_net` | TLS and routing. Applies the site's security headers (§5.7) so the site can't weaken them. |
 | `postgres` | `postgres:17` | `platform_net`, `site_db_net` | Two databases with separate roles (§3.3). |
-| `platform-web` | `oojam-platform` | `edge`, `platform_net`, `outbound` | build.oojam.dev (React Router). Needs `outbound` for Stripe, GitHub OAuth and Anthropic (screening). |
+| `platform-web` | `oojam-platform` | `edge`, `platform_net`, `outbound` | build.oojam.dev (React Router). Needs `outbound` for GitHub OAuth and Anthropic (screening). |
 | `worker` | `oojam-platform` (`node dist/worker/main.js`) | `platform_net`, `outbound` | Cron, orchestrator, guardrails, deployer. Mounts `/var/run/docker.sock` and `/opt/oojam/data` at the same path. |
 | `gateway` | `oojam-platform` (`node dist/gateway/main.js`) | `builder_net`, `platform_net`, `outbound` | Anthropic API proxy for builders (§4.3). |
 | `egress` | `ubuntu/squid` | `builder_net`, `outbound` | Allows only `CONNECT registry.npmjs.org:443`. |
@@ -398,45 +405,39 @@ token: a double-submit token derived from the session (HMAC of the session id).
 
 ### 6.2 Schema (`platform` DB, Drizzle, `src/db/schema.ts`)
 
-All money is integer **cents**. Every balance is derived from append-only entries and never
+All money is integer **cents**. The fund balance is derived from append-only entries and never
 stored on its own.
 
-- `users(id, github_id unique, github_login, name, avatar_url, github_created_at, is_admin, banned_at, banned_reason, created_at)`
+- `users(id, github_id unique, github_login, name, avatar_url, github_created_at, is_admin, banned_at, banned_reason, referred_by?, created_at)`
 - `sessions(id text pk = sha256(token), user_id, expires_at, created_at)`
-- `topups(id, user_id, stripe_checkout_id unique, stripe_payment_intent, amount_cents, status: pending|paid|failed|refunded|disputed, created_at, paid_at)`
-- `wallet_entries(id, user_id, delta_cents, kind: topup|post|vote|refund|adjustment, topup_id?, idea_id?, note, created_at)`
-- `fund_entries(id, account: build|hosting, delta_cents, kind: commit|build_spend|adjustment, wallet_entry_id?, build_id?, note, created_at)`
+- `fund_entries(id, delta_cents, kind: contribution|build_spend|screening|adjustment, source, build_id?, actor_id?, note, created_at)`
 - `ideas(id, author_id, title, body, status: open|frozen|building|deployed|failed|rejected|withdrawn, vote_count, screen_verdict jsonb, rejected_reason, frozen_at, decided_at, created_at)`
-- `votes(id, idea_id, user_id, wallet_entry_id unique, created_at)`. The per-idea cap is
-  enforced in the transaction, with an index on `(idea_id, user_id)`.
+- `votes(id, idea_id, user_id, referrer_id?, created_at)`, unique on `(idea_id, user_id)`.
+- `shares(id, idea_id, user_id?, channel, created_at)` and `ref_visits(id, idea_id?, referrer_id, created_at)`.
 - `comments(id, idea_id, user_id, body, hidden_at, created_at)`
 - `builds(id, day date unique, idea_id, active_token, skipped_idea_ids jsonb, status: queued|screening|building|gating|pr_open|merging|deploying|deployed|failed|rolled_back|skipped, attempt, budget_cents, cost_cents, branch, pr_number, pr_url, merge_sha, gate_report text, summary text, error text, log jsonb, started_at, finished_at, created_at)`
 - `deployments(id, build_id?, sha, container, status: candidate|live|retired|failed, created_at, promoted_at)`
 - `controls(key pk, value jsonb, updated_by, updated_at)`. Keys: `paused` `{paused: bool, reason}`.
-- `stripe_events(id text pk, type, received_at)`. Makes webhook handling idempotent.
 - `audit_log(id, actor_id?, action, subject, data jsonb, created_at)`
 
-### 6.3 Money operations (`src/core/ledger.ts`), each one a single transaction
+### 6.3 Vote and fund operations (`src/core/votes.ts`, `src/core/referrals.ts`, `src/core/fund.ts`)
 
-- `creditTopup(checkoutId)`: idempotent on `topups.status='paid'`. Inserts a `topup` wallet
-  entry.
-- `commit(userId, kind, ideaId)`:
-  1. locks the user row (`SELECT ... FOR UPDATE`);
-  2. checks the balance is at least 100 and the user isn't banned;
-  3. inserts a wallet entry of `-100`;
-  4. inserts fund entries of `+80` build and `+20` hosting (shares from config, with rounding
-     going to build).
-- `postIdea(userId, title, body)`: `commit('post')`, then the idea row, the author's vote, and
-  `vote_count=1`. Screening happens **after** the transaction. A rejection calls
-  `refundPost`, which adds a wallet entry of `+100` and fund entries of `-80/-20`, and marks the
-  idea `rejected`.
-- `vote(userId, ideaId)`:
-  1. locks the idea row and checks it is `open`;
-  2. counts the user's votes on the idea and checks they're below the cap;
-  3. `commit('vote')`, inserts the vote, and does `vote_count += 1`.
-- `chargeBuild(buildId, cents)`: inserts a fund entry of `-cents` on the `build` account. The
-  fund balance may go negative only by the amount a gateway overshoot allows, and that is
-  recorded.
+Each vote operation is a single transaction, and `votes(idea_id, user_id)` is unique, so a vote
+counts once however many times it's sent.
+
+- `postIdea(userId, title, body)`:
+  1. locks the user and checks they aren't banned;
+  2. checks today's post and attempt limits;
+  3. inserts the idea with `vote_count=1` and the author's vote.
+
+  Screening happens **after** the transaction. A rejection calls `rejectAtScreening`, which
+  removes the vote and marks the idea `rejected`.
+- `vote(userId, ideaId, referrerId?)` and `unvote(userId, ideaId)`: lock the idea, check it's
+  `open` and screened, insert or delete the vote, and adjust `vote_count`. Both are idempotent.
+- `recordShare`, `recordRefVisit`, `setReferrer`, `referralSummary`, `topSharers` and
+  `viralStats`: the sharing loop.
+- `recordContribution`, `adjustFund` (admin), plus `chargeBuild` and `chargeScreening` (system):
+  append fund entries.
 
 ### 6.4 Admin
 
@@ -447,30 +448,23 @@ stored on its own.
   - ban users;
   - run today's cycle now;
   - roll back to a previous deployment;
-  - wallet adjustments.
+  - record contributions and fund adjustments.
 - Every admin action goes to `audit_log`, and the audit log is public at `/transparency`.
 
-### 6.5 Stripe
+### 6.5 Sponsorship
 
-- `POST /wallet/topup` creates a Checkout Session:
-  - `mode: payment`, `currency: usd`;
-  - `client_reference_id = user.id`, `metadata.topup_id`;
-  - `success_url = /wallet?topup=success`.
-- `POST /stripe/webhook` verifies `stripe-signature` against the raw body. It handles:
-  - `checkout.session.completed` (when `payment_status=paid`) and
-    `checkout.session.async_payment_succeeded`: credit the top-up;
-  - `checkout.session.async_payment_failed`: mark it failed;
-  - `charge.dispute.created`: mark the top-up `disputed`, ban the user pending review, and write
-    a negative `adjustment` for whatever wallet balance is left.
+There are no payments in the app. "Sponsor oojam" links on both sites go to `SPONSOR_URL`, which is
+GitHub Sponsors for `oojam-dev`. Admins record what reaches the build fund on `/admin`.
 
 ### 6.6 Routes
 
 `/` board (Top · New · Built) · `/ideas/new` · `/ideas/:id` · `/builds` · `/builds/:id` ·
-`/wallet` · `/fund` · `/rules` · `/transparency` · `/admin` · `/auth/github` ·
-`/auth/github/callback` · `/auth/logout` · `/stripe/webhook` · `/healthz`.
+`/account` · `/fund` · `/rules` · `/transparency` · `/admin` · `/auth/github` ·
+`/auth/github/callback` · `/auth/logout` · `/healthz`.
 
-The header shows the fund balance, a countdown to the next freeze, the user's wallet and the
-paused banner.
+The header shows the fund balance, a countdown to the next build, a Sponsor link and the paused
+banner. The board's hero has a large live countdown to the next
+build. oojam.dev shows one too.
 
 ---
 
@@ -506,15 +500,14 @@ and rollback never touches data.
 | `DATABASE_URL` | — | web, worker |
 | `SESSION_SECRET` | — | web |
 | `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | — | web |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | web |
 | `ANTHROPIC_API_KEY` | — | web (screening), worker (review), gateway |
 | `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY_FILE` / `GITHUB_APP_INSTALLATION_ID` | — | worker |
 | `SITE_REPO` | `oojam-dev/oojam` | worker |
 | `SITE_DB_MIGRATOR_URL` / `SITE_DB_APP_URL` | — | worker (passes them to containers) |
 | `GATEWAY_URL` / `GATEWAY_ADMIN_TOKEN` | `http://gateway:8787` | worker, gateway |
-| `BUILD_FUND_SHARE` | `0.8` | core |
-| `MAX_VOTES_PER_USER_PER_IDEA` | `10` | core |
-| `BUILD_BUDGET_CAP_USD` / `BUILD_BUDGET_MIN_USD` | `25` / `3` | worker |
+| `MAX_IDEAS_PER_DAY` | `1` | core |
+| `SPONSOR_URL` | `https://github.com/sponsors/oojam-dev` | core |
+| `BUILD_BUDGET_CAP_USD` / `BUILD_BUDGET_MIN_USD` | `10` / `3` | worker |
 | `BUILD_MODEL` / `BUILD_EFFORT` | `claude-opus-5-5` / `high` | worker |
 | `REVIEW_MODEL` / `SCREEN_MODEL` | `claude-opus-5-5` | worker / web |
 | `BUILD_TIMEOUT_MIN` | `60` | worker |

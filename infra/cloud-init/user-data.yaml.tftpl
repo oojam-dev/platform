@@ -204,7 +204,7 @@ write_files:
         ssh oojam@<this server>
         cd /opt/oojam/platform/deploy
         cp .env.example .env && chmod 600 .env
-        $EDITOR .env                     # domains, ACME_EMAIL, Stripe, GitHub, Anthropic keys
+        $EDITOR .env                     # domains, ACME_EMAIL, GitHub, Anthropic keys
         $EDITOR secrets/github-app.pem   # the GitHub App's private key (chmod 600)
         bin/bootstrap                    # generates DB passwords, builds, starts everything
 

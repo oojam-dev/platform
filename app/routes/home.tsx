@@ -1,12 +1,15 @@
 import { Link, NavLink } from "react-router";
 
-import { listBoard, type BoardSort } from "../../src/core/ideas.js";
+import { listBoard, topOpenIdea, type BoardSort } from "../../src/core/ideas.js";
+import { topSharers } from "../../src/core/referrals.js";
+import { votedOn } from "../../src/core/votes.js";
 import { getDb } from "../../src/db/client.js";
-import { StatusChip, Author, EmptyState } from "../components/ui";
+import { BigCountdown } from "../components/countdown";
+import { ShareButton } from "../components/share";
+import { Author, Avatar, EmptyState, SponsorCard, StatusChip } from "../components/ui";
 import { VoteButton } from "../components/vote-button";
 import { VoteNotice } from "../components/vote-notice";
 import { ago, plural } from "../lib/format";
-import { myVoteCounts } from "../lib/queries.server";
 import { useRootData } from "../lib/root-data";
 import { optionalUser } from "../lib/session.server";
 import type { Route } from "./+types/home";
@@ -22,41 +25,54 @@ export async function loader({ request }: Route.LoaderArgs) {
   const raw = url.searchParams.get("tab");
   const tab: BoardSort = raw === "new" || raw === "built" ? raw : "top";
   const db = getDb();
-  const [user, items] = await Promise.all([optionalUser(request), listBoard(db, tab, 100)]);
-  const mine = user ? await myVoteCounts(db, user.id, items.map((i) => i.id)) : {};
-  return { tab, items, mine, now: Date.now() };
+  const [user, items, top, sharers] = await Promise.all([
+    optionalUser(request),
+    listBoard(db, tab, 100),
+    topOpenIdea(db),
+    topSharers(db, 5, 30),
+  ]);
+  const voted = user ? [...(await votedOn(db, user.id, items.map((i) => i.id)))] : [];
+  const leader = top ? { id: top.id, title: top.title, voteCount: top.voteCount } : null;
+  return { tab, items, voted, leader, sharers, viewer: user?.githubLogin ?? null, now: Date.now() };
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-  const { tab, items, mine, now } = loaderData;
+  const { tab, items, voted, leader, sharers, viewer, now } = loaderData;
   const root = useRootData();
+  const votedSet = new Set(voted);
 
   return (
     <>
-      <section className="mb-12 grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
+      <section className="mb-8 grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
         <div className="max-w-3xl">
           <p className="kicker mb-3">The community decides what oojam.dev becomes</p>
           <h1 className="font-display text-[2.4rem] font-black leading-[0.98] tracking-[-0.035em] text-balance sm:text-6xl">
-            Spend a dollar. <span className="text-jam">Steer a website.</span>
+            Vote for free. <span className="text-jam">Steer a website.</span>
           </h1>
           <p className="mt-5 max-w-2xl text-lg leading-relaxed text-ink-2 text-pretty">
-            Post an idea for $1, back the ones you like with $1 votes. Every night at 00:00&nbsp;UTC the top idea is
-            frozen, built by Claude, merged into the open-source repo and deployed to{" "}
+            Post an idea, vote for the ones you like, share them with friends — it's all free. Every night at 00:00&nbsp;UTC the top idea is frozen,
+            built by Claude, merged into the open-source repo and deployed to{" "}
             <a href="https://oojam.dev" className="link">
               oojam.dev
             </a>
-            .
+            . Just a bit of fun.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Link to="/ideas/new" className="btn btn-jam px-5 py-3 text-base">
-            Post an idea — $1
+            Post an idea
           </Link>
           <Link to="/rules" className="btn btn-ghost px-5 py-3 text-base">
             How it works
           </Link>
         </div>
       </section>
+
+      {root && (
+        <div className="mb-12">
+          <BigCountdown target={root.nextFreezeAt} serverNow={root.serverNow} paused={root.paused} leader={leader} />
+        </div>
+      )}
 
       <VoteNotice />
 
@@ -98,12 +114,12 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 title="The board is empty. Go first."
                 action={
                   <Link to="/ideas/new" className="btn btn-jam px-5 py-3 text-base">
-                    Post the first idea — $1
+                    Post the first idea
                   </Link>
                 }
               >
                 oojam.dev has no purpose until someone gives it one. Whatever sits on top at midnight UTC gets built by
-                Claude and shipped — and right now, one dollar puts you on top.
+                Claude and shipped — and right now, a single vote puts you on top.
               </EmptyState>
             )
           ) : (
@@ -124,8 +140,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                           ideaId: item.id,
                           title: item.title,
                           voteCount: item.voteCount,
-                          mine: mine[item.id] ?? 0,
+                          voted: votedSet.has(item.id),
                           open: votable,
+                          closedReason: "Voting closed when this idea was frozen.",
                         }}
                       />
                     )}
@@ -146,13 +163,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                           {plural(item.commentCount, "comment")}
                         </Link>
                         <span>{ago(item.createdAt, now)}</span>
-                        {mine[item.id] ? (
-                          <span className="font-semibold text-jam-ink">
-                            {mine[item.id]}/{root?.rules.maxVotes ?? 10} yours
-                          </span>
-                        ) : null}
                         {item.status !== "open" && <StatusChip status={item.status} />}
                       </div>
+                    </div>
+                    <div className="shrink-0 self-start">
+                      <ShareButton
+                        ideaId={item.id}
+                        title={item.title}
+                        isAuthor={viewer !== null && viewer.toLowerCase() === item.author.toLowerCase()}
+                        variant="icon"
+                      />
                     </div>
                   </li>
                 );
@@ -161,7 +181,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           )}
         </section>
 
-        <HowItWorks />
+        <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+          <HowItWorks />
+          <TopSharers sharers={sharers} />
+          {root && <SponsorCard url={root.sponsorUrl} compact />}
+        </div>
       </div>
     </>
   );
@@ -169,55 +193,62 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
 function HowItWorks() {
   const root = useRootData();
-  const share = Math.round((root?.rules.buildShare ?? 0.8) * 100);
-  const max = root?.rules.maxVotes ?? 10;
+  const ideas = root?.rules.maxIdeasPerDay ?? 1;
   const steps = [
-    { big: "$1", text: "posts an idea or adds one vote. Posting includes your first vote." },
-    { big: `${max}×`, text: `max votes per person on any one idea, so nobody can simply buy the board.` },
+    { big: "Free", text: "Vote for as many ideas as you like — one vote each. Changed your mind? Take it back." },
+    { big: `${ideas}/day`, text: "Post one idea a day. Posting counts as your vote for it." },
+    { big: "Share", text: "Your share link credits you for every vote it brings in." },
     { big: "00:00", text: "UTC every day, the top idea freezes and Claude builds it." },
     { big: "Ship", text: "Guardrails check it, then it's merged and deployed automatically." },
   ];
   return (
-    <aside aria-labelledby="how-title" className="lg:sticky lg:top-6 lg:self-start">
-      <div className="card p-6">
-        <h2 id="how-title" className="font-display text-xl font-black tracking-tight">
-          How it works
-        </h2>
-        <ol className="mt-5 space-y-4">
-          {steps.map((s) => (
-            <li key={s.big} className="flex gap-3">
-              <span className="num w-14 shrink-0 font-display text-lg font-black text-jam">{s.big}</span>
-              <span className="text-sm leading-relaxed text-ink-2">{s.text}</span>
-            </li>
-          ))}
-        </ol>
-        <div className="mt-6 border-t border-line pt-5">
-          <p className="text-sm font-semibold">Where every committed dollar goes</p>
-          <div className="mt-3 flex h-3 overflow-hidden rounded-full" role="img" aria-label={`${share}% build fund, ${100 - share}% hosting`}>
-            <span className="bg-jam" style={{ width: `${share}%` }} />
-            <span className="bg-line-strong" style={{ width: `${100 - share}%` }} />
-          </div>
-          <div className="mt-2 flex justify-between text-xs text-ink-2">
-            <span>
-              <strong className="text-ink">{share}%</strong> pays for builds
-            </span>
-            <span>
-              <strong className="text-ink">{100 - share}%</strong> hosting
-            </span>
-          </div>
-        </div>
-        <p className="mt-5 text-xs leading-relaxed text-ink-3">
-          Ideas are screened against the{" "}
-          <Link to="/rules" className="link">
-            content policy
-          </Link>
-          ; rejected ones are refunded. Spending is public on{" "}
-          <Link to="/fund" className="link">
-            /fund
-          </Link>
-          .
-        </p>
-      </div>
+    <aside aria-labelledby="how-title" className="card p-6">
+      <h2 id="how-title" className="font-display text-xl font-black tracking-tight">
+        How it works
+      </h2>
+      <ol className="mt-5 space-y-4">
+        {steps.map((s) => (
+          <li key={s.big} className="flex gap-3">
+            <span className="num w-16 shrink-0 font-display text-lg font-black text-jam">{s.big}</span>
+            <span className="text-sm leading-relaxed text-ink-2">{s.text}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-5 border-t border-line pt-4 text-xs leading-relaxed text-ink-3">
+        No payments, no wallets. Ideas are screened against the{" "}
+        <Link to="/rules" className="link">
+          content policy
+        </Link>
+        ; if one's rejected, it doesn't count as your idea for the day.
+      </p>
     </aside>
+  );
+}
+
+function TopSharers({ sharers }: { sharers: { login: string; avatarUrl: string | null; voters: number }[] }) {
+  if (sharers.length === 0) return null;
+  return (
+    <section aria-labelledby="sharers-title" className="card p-6">
+      <h2 id="sharers-title" className="font-display text-lg font-black tracking-tight">
+        Top sharers
+      </h2>
+      <p className="mt-0.5 text-xs text-ink-3">Voters brought in through share links, last 30 days</p>
+      <ol className="mt-4 space-y-3">
+        {sharers.map((s, i) => (
+          <li key={s.login} className="flex items-center gap-3 text-sm">
+            <span className="num w-4 text-right font-bold text-ink-3">{i + 1}</span>
+            <Avatar src={s.avatarUrl} login={s.login} size={26} />
+            <a
+              href={`https://github.com/${encodeURIComponent(s.login)}`}
+              rel="nofollow noopener"
+              className="min-w-0 flex-1 truncate font-semibold hover:underline"
+            >
+              @{s.login}
+            </a>
+            <span className="num shrink-0 font-semibold text-jam-ink">{s.voters}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }

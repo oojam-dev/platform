@@ -73,7 +73,8 @@ async function tick(): Promise<void> {
 async function main(): Promise<void> {
   console.log(`worker: starting (cron "${config.cycleCron}" UTC${config.dryRun ? ", DRY RUN" : ""})`);
   await exclusive("startup", async () => {
-    if (!config.dryRun) await ensureSiteRunning(db, async (m) => console.log(`worker: ${m}`));
+    // Serving main is always safe, dry run or not: it pushes and merges nothing.
+    await ensureSiteRunning(db, async (m) => console.log(`worker: ${m}`));
     await resumeUnfinished();
   });
 

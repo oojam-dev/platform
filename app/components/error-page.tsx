@@ -13,7 +13,7 @@ export function ErrorPage({ code, title, detail, stack }: { code: string; title:
           Back to the board
         </Link>
         <Link to="/ideas/new" className="btn btn-ghost">
-          Post an idea — $1
+          Post an idea
         </Link>
       </div>
       {stack && (

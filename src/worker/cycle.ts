@@ -10,12 +10,12 @@ import { eq, sql } from "drizzle-orm";
 import { config } from "../core/config.js";
 import { audit, getPaused } from "../core/controls.js";
 import { topOpenIdea } from "../core/ideas.js";
-import { chargeBuild, fundBalance } from "../core/ledger.js";
+import { chargeBuild, fundBalance } from "../core/fund.js";
 import { usdToCents } from "../core/pricing.js";
 import { screenIdea } from "../core/screen.js";
 import { utcDay } from "../core/time.js";
 import type { Database } from "../db/client.js";
-import { builds, fundEntries, ideas, users, type BuildStatus } from "../db/schema.js";
+import { builds, ideas, users, type BuildStatus } from "../db/schema.js";
 import { commitWorkTree } from "../guardrails/git.js";
 import { newBuildToken, registerToken, revokeToken, runAttempt } from "./builder-run.js";
 import { DeployError, deploySite } from "./deployer.js";
@@ -115,10 +115,10 @@ export async function runCycle(db: Database, day = utcDay()): Promise<Build | un
 async function stepFreeze(db: Database, b: Build): Promise<Build> {
   const idea = await topOpenIdea(db, b.skippedIdeaIds);
   if (!idea) return finish(db, b, "skipped", null, "No ideas on the board today.");
-  const fund = await fundBalance(db, "build");
+  const fund = await fundBalance(db);
   const budgetCents = Math.min(fund, Math.round(config.buildBudgetCapUsd * 100));
   if (budgetCents < config.buildBudgetMinUsd * 100) {
-    return finish(db, b, "skipped", null, `The build fund ($${(fund / 100).toFixed(2)}) is below the $${config.buildBudgetMinUsd} minimum for a build. Commit credits to fund tomorrow's build.`);
+    return finish(db, b, "skipped", null, `The build fund ($${(fund / 100).toFixed(2)}) is below the $${config.buildBudgetMinUsd} minimum for a build. Sponsor oojam to fund the next one: ${config.sponsorUrl}`);
   }
   await db.update(ideas).set({ status: "frozen", frozenAt: new Date() }).where(eq(ideas.id, idea.id));
   await audit(db, null, "freeze", `idea:${idea.id}`, { day: b.day, votes: idea.voteCount });
@@ -313,10 +313,4 @@ async function stepDeploy(db: Database, b: Build): Promise<Build> {
     }
     throw error;
   }
-}
-
-/** The fund only ever goes down by real spend. Exposed for the admin page. */
-export async function buildSpend(db: Database, buildId: number): Promise<number> {
-  const [row] = await db.select({ c: sql<number>`coalesce(-sum(${fundEntries.deltaCents}), 0)::int` }).from(fundEntries).where(eq(fundEntries.buildId, buildId));
-  return row?.c ?? 0;
 }

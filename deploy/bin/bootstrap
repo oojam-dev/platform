@@ -17,8 +17,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 GENERATED=(POSTGRES_PASSWORD PLATFORM_OWNER_PASSWORD PLATFORM_APP_PASSWORD SITE_MIGRATOR_PASSWORD
   SITE_APP_PASSWORD BACKUP_DB_PASSWORD SESSION_SECRET GATEWAY_ADMIN_TOKEN)
-REQUIRED=(SITE_DOMAIN PLATFORM_DOMAIN ACME_EMAIL ANTHROPIC_API_KEY GITHUB_OAUTH_CLIENT_ID
-  GITHUB_OAUTH_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID)
+REQUIRED=(SITE_DOMAIN PLATFORM_DOMAIN ACME_EMAIL GITHUB_OAUTH_CLIENT_ID
+  GITHUB_OAUTH_CLIENT_SECRET GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID)
 DB_PASSWORDS=(POSTGRES_PASSWORD PLATFORM_OWNER_PASSWORD PLATFORM_APP_PASSWORD SITE_MIGRATOR_PASSWORD
   SITE_APP_PASSWORD BACKUP_DB_PASSWORD)
 
@@ -51,7 +51,7 @@ if ((${#missing[@]})); then
   printf '(README.md › First-time setup says where each one comes from.)\n' >&2
   exit 1
 fi
-[[ $(env_get STRIPE_SECRET_KEY) == sk_live_* ]] || warn "STRIPE_SECRET_KEY is not a live key (sk_live_…)"
+[[ -n $(env_get ANTHROPIC_API_KEY) ]] || warn "ANTHROPIC_API_KEY is empty: screening and builds will fail until it is set"
 [[ $(env_get DRY_RUN) == true ]] && warn "DRY_RUN=true: the cycle runs but never pushes, merges or deploys (set false when ready)"
 
 # ── 2. GitHub App key ───────────────────────────────────────────────────────

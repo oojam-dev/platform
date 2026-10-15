@@ -4,10 +4,10 @@ import { and, asc, eq, like } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { comments, controls, ideas, sessions, users } from "../db/schema.js";
 import { audit } from "./controls.js";
-import { LedgerError, adjustWallet } from "./ledger.js";
+import { RuleError } from "./errors.js";
 
 function needReason(reason: string) {
-  if (!reason.trim()) throw new LedgerError("invalid", "A reason is required; it is published on /transparency.");
+  if (!reason.trim()) throw new RuleError("invalid", "A reason is required; it is published on /transparency.");
 }
 
 export async function hideIdea(db: Database, actorId: number, ideaId: number, reason: string) {
@@ -24,7 +24,7 @@ export async function rejectIdea(db: Database, actorId: number, ideaId: number, 
     .set({ status: "rejected", rejectedReason: reason, decidedAt: new Date() })
     .where(and(eq(ideas.id, ideaId), eq(ideas.status, "open")))
     .returning({ id: ideas.id });
-  if (rows.length === 0) throw new LedgerError("invalid", "Only open ideas can be rejected; pause the system to stop a build in progress.");
+  if (rows.length === 0) throw new RuleError("invalid", "Only open ideas can be rejected; pause the system to stop a build in progress.");
   await audit(db, actorId, "reject_idea", `idea:${ideaId}`, { reason });
 }
 
@@ -45,12 +45,6 @@ export async function unbanUser(db: Database, actorId: number, userId: number, r
   needReason(reason);
   await db.update(users).set({ bannedAt: null, bannedReason: null }).where(eq(users.id, userId));
   await audit(db, actorId, "unban_user", `user:${userId}`, { reason });
-}
-
-export async function adminAdjustWallet(db: Database, actorId: number, userId: number, cents: number, reason: string) {
-  needReason(reason);
-  await adjustWallet(db, userId, cents, reason);
-  await audit(db, actorId, "adjust_wallet", `user:${userId}`, { cents, reason });
 }
 
 /**

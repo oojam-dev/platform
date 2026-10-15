@@ -1,5 +1,5 @@
 {
-  "id": "72416bf5-54b9-4038-bfd6-acb7465f98a5",
+  "id": "9036c287-cf35-4cc2-a0d1-686629acb95d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -164,6 +164,19 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "active_token": {
+          "name": "active_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "skipped_idea_ids": {
+          "name": "skipped_idea_ids",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         },
         "gate_report": {
           "name": "gate_report",
@@ -524,12 +537,6 @@
           "primaryKey": true,
           "notNull": true
         },
-        "account": {
-          "name": "account",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "delta_cents": {
           "name": "delta_cents",
           "type": "integer",
@@ -542,14 +549,20 @@
           "primaryKey": false,
           "notNull": true
         },
-        "wallet_entry_id": {
-          "name": "wallet_entry_id",
-          "type": "bigint",
+        "source": {
+          "name": "source",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
         "build_id": {
           "name": "build_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actor_id": {
+          "name": "actor_id",
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
@@ -569,11 +582,11 @@
         }
       },
       "indexes": {
-        "fund_entries_account_idx": {
-          "name": "fund_entries_account_idx",
+        "fund_entries_kind_idx": {
+          "name": "fund_entries_kind_idx",
           "columns": [
             {
-              "expression": "account",
+              "expression": "kind",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -601,12 +614,12 @@
         }
       },
       "foreignKeys": {
-        "fund_entries_wallet_entry_id_wallet_entries_id_fk": {
-          "name": "fund_entries_wallet_entry_id_wallet_entries_id_fk",
+        "fund_entries_actor_id_users_id_fk": {
+          "name": "fund_entries_actor_id_users_id_fk",
           "tableFrom": "fund_entries",
-          "tableTo": "wallet_entries",
+          "tableTo": "users",
           "columnsFrom": [
-            "wallet_entry_id"
+            "actor_id"
           ],
           "columnsTo": [
             "id"
@@ -767,6 +780,102 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.ref_visits": {
+      "name": "ref_visits",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "idea_id": {
+          "name": "idea_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "referrer_id": {
+          "name": "referrer_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ref_visits_referrer_idx": {
+          "name": "ref_visits_referrer_idx",
+          "columns": [
+            {
+              "expression": "referrer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ref_visits_created_idx": {
+          "name": "ref_visits_created_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ref_visits_idea_id_ideas_id_fk": {
+          "name": "ref_visits_idea_id_ideas_id_fk",
+          "tableFrom": "ref_visits",
+          "tableTo": "ideas",
+          "columnsFrom": [
+            "idea_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ref_visits_referrer_id_users_id_fk": {
+          "name": "ref_visits_referrer_id_users_id_fk",
+          "tableFrom": "ref_visits",
+          "tableTo": "users",
+          "columnsFrom": [
+            "referrer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.sessions": {
       "name": "sessions",
       "schema": "",
@@ -835,40 +944,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.stripe_events": {
-      "name": "stripe_events",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "received_at": {
-          "name": "received_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.topups": {
-      "name": "topups",
+    "public.shares": {
+      "name": "shares",
       "schema": "",
       "columns": {
         "id": {
@@ -877,36 +954,23 @@
           "primaryKey": true,
           "notNull": true
         },
-        "user_id": {
-          "name": "user_id",
+        "idea_id": {
+          "name": "idea_id",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
-        "stripe_checkout_id": {
-          "name": "stripe_checkout_id",
-          "type": "text",
+        "user_id": {
+          "name": "user_id",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
-        "stripe_payment_intent": {
-          "name": "stripe_payment_intent",
+        "channel": {
+          "name": "channel",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "amount_cents": {
-          "name": "amount_cents",
-          "type": "integer",
           "primaryKey": false,
           "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
         },
         "created_at": {
           "name": "created_at",
@@ -914,20 +978,14 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "paid_at": {
-          "name": "paid_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
-        "topups_user_idx": {
-          "name": "topups_user_idx",
+        "shares_idea_idx": {
+          "name": "shares_idea_idx",
           "columns": [
             {
-              "expression": "user_id",
+              "expression": "idea_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -938,11 +996,11 @@
           "method": "btree",
           "with": {}
         },
-        "topups_payment_intent_idx": {
-          "name": "topups_payment_intent_idx",
+        "shares_created_idx": {
+          "name": "shares_created_idx",
           "columns": [
             {
-              "expression": "stripe_payment_intent",
+              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -955,9 +1013,22 @@
         }
       },
       "foreignKeys": {
-        "topups_user_id_users_id_fk": {
-          "name": "topups_user_id_users_id_fk",
-          "tableFrom": "topups",
+        "shares_idea_id_ideas_id_fk": {
+          "name": "shares_idea_id_ideas_id_fk",
+          "tableFrom": "shares",
+          "tableTo": "ideas",
+          "columnsFrom": [
+            "idea_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "shares_user_id_users_id_fk": {
+          "name": "shares_user_id_users_id_fk",
+          "tableFrom": "shares",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -970,22 +1041,9 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "topups_stripe_checkout_id_unique": {
-          "name": "topups_stripe_checkout_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "stripe_checkout_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "topups_amount_check": {
-          "name": "topups_amount_check",
-          "value": "\"topups\".\"amount_cents\" > 0"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.users": {
@@ -1047,6 +1105,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "referred_by": {
+          "name": "referred_by",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1093,11 +1157,11 @@
           "primaryKey": false,
           "notNull": true
         },
-        "wallet_entry_id": {
-          "name": "wallet_entry_id",
+        "referrer_id": {
+          "name": "referrer_id",
           "type": "bigint",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -1108,8 +1172,8 @@
         }
       },
       "indexes": {
-        "votes_idea_user_idx": {
-          "name": "votes_idea_user_idx",
+        "votes_idea_user_key": {
+          "name": "votes_idea_user_key",
           "columns": [
             {
               "expression": "idea_id",
@@ -1119,6 +1183,36 @@
             },
             {
               "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "votes_user_idx": {
+          "name": "votes_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "votes_referrer_idx": {
+          "name": "votes_referrer_idx",
+          "columns": [
+            {
+              "expression": "referrer_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1157,141 +1251,12 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "votes_wallet_entry_id_wallet_entries_id_fk": {
-          "name": "votes_wallet_entry_id_wallet_entries_id_fk",
+        "votes_referrer_id_users_id_fk": {
+          "name": "votes_referrer_id_users_id_fk",
           "tableFrom": "votes",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "wallet_entry_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "votes_wallet_entry_id_unique": {
-          "name": "votes_wallet_entry_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "wallet_entry_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.wallet_entries": {
-      "name": "wallet_entries",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delta_cents": {
-          "name": "delta_cents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "topup_id": {
-          "name": "topup_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "idea_id": {
-          "name": "idea_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wallet_entries_user_idx": {
-          "name": "wallet_entries_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "wallet_entries_topup_once": {
-          "name": "wallet_entries_topup_once",
-          "columns": [
-            {
-              "expression": "topup_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"wallet_entries\".\"kind\" = 'topup'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wallet_entries_user_id_users_id_fk": {
-          "name": "wallet_entries_user_id_users_id_fk",
-          "tableFrom": "wallet_entries",
           "tableTo": "users",
           "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wallet_entries_topup_id_topups_id_fk": {
-          "name": "wallet_entries_topup_id_topups_id_fk",
-          "tableFrom": "wallet_entries",
-          "tableTo": "topups",
-          "columnsFrom": [
-            "topup_id"
+            "referrer_id"
           ],
           "columnsTo": [
             "id"

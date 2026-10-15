@@ -182,3 +182,33 @@ export function BackLink({ to, children }: { to: string; children: ReactNode }) 
     </Link>
   );
 }
+
+export function HeartIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" width={size} height={size} fill="currentColor" className="shrink-0 text-jam">
+      <path d="M8 14.25s-5.75-3.4-5.75-7.6A3.15 3.15 0 0 1 8 4.3a3.15 3.15 0 0 1 5.75 2.35c0 4.2-5.75 7.6-5.75 7.6Z" />
+    </svg>
+  );
+}
+
+/** "oojam runs on donated Anthropic credits…" — on /fund and in How it works. */
+export function SponsorCard({ url, compact = false }: { url: string; compact?: boolean }) {
+  return (
+    <div className={`rounded-2xl bg-jam-soft text-jam-ink ${compact ? "p-4" : "p-6"}`}>
+      <p className={`flex items-center gap-2 font-display font-black tracking-tight ${compact ? "text-base" : "text-xl"}`}>
+        <HeartIcon size={compact ? 16 : 20} /> Sponsor oojam
+      </p>
+      <p className={`mt-1.5 leading-relaxed ${compact ? "text-sm" : ""}`}>
+        oojam runs on donated Anthropic credits. Sponsoring pays for builds — it never buys votes.
+      </p>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener"
+        className={`btn btn-jam mt-4 ${compact ? "btn-sm" : ""}`}
+      >
+        Become a sponsor <span aria-hidden="true">↗</span>
+      </a>
+    </div>
+  );
+}

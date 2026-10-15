@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import {
-  Form,
   Link,
   Links,
   Meta,
@@ -14,15 +13,15 @@ import {
 
 import { config } from "../src/core/config.js";
 import { getPaused } from "../src/core/controls.js";
-import { fundBalance, walletBalance } from "../src/core/ledger.js";
+import { fundBalance } from "../src/core/fund.js";
 import { nextFreeze } from "../src/core/time.js";
 import { getDb } from "../src/db/client.js";
 import type { Route } from "./+types/root";
 import "./app.css";
 import { Countdown } from "./components/countdown";
 import { ErrorPage } from "./components/error-page";
-import { Avatar, CsrfInput, Wordmark } from "./components/ui";
-import { credits, money } from "./lib/format";
+import { Avatar, HeartIcon, Wordmark } from "./components/ui";
+import { money } from "./lib/format";
 import { useRootData } from "./lib/root-data";
 import { csrfToken, optionalUser } from "./lib/session.server";
 
@@ -30,18 +29,15 @@ export const meta: Route.MetaFunction = () => [
   { title: "oojam build — the community decides what oojam.dev becomes" },
   {
     name: "description",
-    content: "Post an idea for $1, vote with $1. Every day at 00:00 UTC Claude builds the top idea into oojam.dev.",
+    content:
+      "Vote for the ideas you like, free. Every day at 00:00 UTC the top idea is built by Claude and deployed to oojam.dev. Just a bit of fun.",
   },
 ];
 
 export async function loader({ request }: Route.LoaderArgs) {
   const db = getDb();
   const user = await optionalUser(request);
-  const [fundCents, paused, balanceCents] = await Promise.all([
-    fundBalance(db, "build"),
-    getPaused(db),
-    user ? walletBalance(db, user.id) : Promise.resolve(0),
-  ]);
+  const [fundCents, paused] = await Promise.all([fundBalance(db), getPaused(db)]);
   return {
     user: user
       ? {
@@ -52,7 +48,6 @@ export async function loader({ request }: Route.LoaderArgs) {
           isAdmin: user.isAdmin,
           bannedAt: user.bannedAt,
           bannedReason: user.bannedReason,
-          balanceCents,
         }
       : null,
     csrf: csrfToken(user),
@@ -60,9 +55,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     nextFreezeAt: nextFreeze().toISOString(),
     serverNow: Date.now(),
     paused,
+    sponsorUrl: config.sponsorUrl,
+    platformUrl: config.platformUrl.replace(/\/$/, ""),
     rules: {
-      maxVotes: config.maxVotesPerUserPerIdea,
-      buildShare: config.buildFundShare,
+      maxIdeasPerDay: config.maxIdeasPerDay,
       budgetCapUsd: config.buildBudgetCapUsd,
       budgetMinUsd: config.buildBudgetMinUsd,
     },
@@ -94,24 +90,30 @@ function Header() {
         </Link>
 
         <div className="flex items-center gap-2 sm:gap-3">
+          {root && (
+            <a
+              href={root.sponsorUrl}
+              target="_blank"
+              rel="noopener"
+              className="inline-flex items-center gap-1.5 rounded-full px-2 py-1.5 text-sm font-semibold text-ink-2 hover:text-jam-ink"
+              title="Sponsor oojam: pays for builds, never buys votes"
+            >
+              <HeartIcon />
+              <span className="sr-only sm:not-sr-only">Sponsor</span>
+              <span className="sr-only sm:hidden">Sponsor oojam</span>
+            </a>
+          )}
           {user ? (
-            <>
-              <Link
-                to="/wallet"
-                className="inline-flex items-center gap-2 rounded-full border border-line-strong py-1 pr-1 pl-3 text-sm font-semibold hover:border-ink"
-                title="Your wallet"
-              >
-                <span className="num">{credits(user.balanceCents)}</span>
-                <span className="sr-only">in your wallet, signed in as @{user.login}</span>
-                <Avatar src={user.avatarUrl} login={user.login} size={28} />
-              </Link>
-              <Form method="post" action="/auth/logout" className="hidden sm:block">
-                <CsrfInput />
-                <button type="submit" className="text-sm font-medium text-ink-3 hover:text-ink">
-                  Sign out
-                </button>
-              </Form>
-            </>
+            <Link
+              to="/account"
+              className="inline-flex items-center gap-2 rounded-full border border-line-strong py-1 pr-1 pl-3 text-sm font-semibold hover:border-ink"
+              title="Your account"
+            >
+              <span className="max-w-[9rem] truncate">
+                <span className="sr-only">Your account, signed in as </span>@{user.login}
+              </span>
+              <Avatar src={user.avatarUrl} login={user.login} size={28} />
+            </Link>
           ) : (
             <Link to={`/auth/github?return=${encodeURIComponent(returnTo)}`} className="btn btn-jam btn-sm">
               <GithubIcon />
@@ -198,14 +200,15 @@ function Banners() {
 }
 
 function Footer() {
+  const root = useRootData();
   return (
     <footer className="mt-24 border-t border-line">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 text-sm sm:grid-cols-[1.4fr_1fr_1fr] sm:px-6">
         <div>
           <Wordmark className="text-2xl" />
           <p className="mt-2 max-w-xs text-ink-2">
-            A website with no designated purpose. The community decides what it becomes, one dollar and one day at a
-            time.
+            A website with no designated purpose. The community decides what it becomes, one vote and one day at a
+            time. Just a bit of fun.
           </p>
         </div>
         <ul className="space-y-2">
@@ -237,6 +240,14 @@ function Footer() {
               github.com/oojam-dev/platform
             </a>
           </li>
+          {root && (
+            <li>
+              <a className="link inline-flex items-center gap-1" href={root.sponsorUrl} target="_blank" rel="noopener">
+                <HeartIcon /> Sponsor oojam
+              </a>
+              <span className="text-ink-3"> — pays for builds, never buys votes</span>
+            </li>
+          )}
           <li className="text-ink-3">Everything is open source · MIT</li>
         </ul>
       </div>
@@ -245,6 +256,8 @@ function Footer() {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  // /embed/* is framed by other sites: no chrome, transparent background.
+  const embed = useLocation().pathname.startsWith("/embed/");
   return (
     <html lang="en">
       <head>
@@ -260,6 +273,12 @@ export function Layout({ children }: { children: ReactNode }) {
         <Meta />
         <Links />
       </head>
+      {embed ? (
+        <body className="bg-transparent! p-0">
+          {children}
+          <Scripts />
+        </body>
+      ) : (
       <body className="min-h-dvh">
         <a
           href="#main"
@@ -276,6 +295,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <ScrollRestoration />
         <Scripts />
       </body>
+      )}
     </html>
   );
 }

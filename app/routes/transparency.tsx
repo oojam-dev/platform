@@ -34,7 +34,9 @@ const ACTIONS: Record<string, string> = {
   hide_comment: "Hid a comment",
   ban_user: "Banned a user",
   unban_user: "Unbanned a user",
-  adjust_wallet: "Adjusted a wallet",
+  adjust_wallet: "Adjusted a wallet (before oojam went free)",
+  contribution: "Recorded a contribution to the build fund",
+  adjust_fund: "Adjusted the build fund",
   request_run_cycle: "Asked the worker to run today's cycle now",
   request_rollback: "Asked the worker to roll back a deployment",
   screen_reject: "Screening rejected an idea",
@@ -46,7 +48,7 @@ export default function Transparency({ loaderData }: Route.ComponentProps) {
   return (
     <>
       <PageTitle kicker="Public audit log" title="Transparency">
-        Every moderation decision, admin action, wallet adjustment and automated rejection is recorded here, with its
+        Every moderation decision, admin action, fund contribution and automated rejection is recorded here, with its
         reason. Nothing is deleted.
       </PageTitle>
       {entries.length === 0 ? (
@@ -56,7 +58,9 @@ export default function Transparency({ loaderData }: Route.ComponentProps) {
           {entries.map((e) => {
             const subj = parseSubject(e.subject);
             const data = (e.data ?? {}) as Record<string, unknown>;
-            const reason = typeof data.reason === "string" ? data.reason : null;
+            const reason =
+              typeof data.reason === "string" ? data.reason : typeof data.note === "string" && data.note ? data.note : null;
+            const source = typeof data.source === "string" ? data.source : null;
             const cents = typeof data.cents === "number" ? data.cents : null;
             const category = typeof data.category === "string" ? data.category : null;
             const deploymentId = typeof data.deploymentId === "number" ? data.deploymentId : null;
@@ -84,6 +88,7 @@ export default function Transparency({ loaderData }: Route.ComponentProps) {
                     {deploymentId != null && <span className="font-normal text-ink-2"> (deployment #{deploymentId})</span>}
                   </p>
                   {reason && <p className="mt-0.5 text-sm text-ink-2">“{reason}”</p>}
+                  {source && <p className="mt-0.5 text-sm text-ink-2">from {source}</p>}
                   {category && <p className="mt-0.5 font-mono text-xs text-ink-3">rule: {category}</p>}
                   <p className="mt-1 text-xs text-ink-3">by {e.actor ? `@${e.actor}` : "the system"}</p>
                 </div>

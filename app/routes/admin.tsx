@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
 import { Form, data, useNavigation } from "react-router";
 
-import { adminAdjustWallet, banUser, requestWorker, unbanUser } from "../../src/core/admin.js";
+import { banUser, requestWorker, unbanUser } from "../../src/core/admin.js";
 import { getPaused, setPaused } from "../../src/core/controls.js";
-import { LedgerError } from "../../src/core/ledger.js";
+import { RuleError } from "../../src/core/errors.js";
+import { adjustFund, recordContribution } from "../../src/core/fund.js";
+import { viralStats, type ViralStats } from "../../src/core/referrals.js";
 import { getDb } from "../../src/db/client.js";
 import { CsrfInput, Notice, PageTitle, StatusChip } from "../components/ui";
-import { dateTime, day, signedMoney } from "../lib/format";
-import { pendingWorkerRequest, recentDeployments, userByLogin } from "../lib/queries.server";
+import { dateTime, day, money, signedMoney } from "../lib/format";
+import { pendingWorkerRequests, recentDeployments, userByLogin } from "../lib/queries.server";
 import { requireAdmin, requireMutation } from "../lib/session.server";
 import type { Route } from "./+types/admin";
 
@@ -16,11 +18,25 @@ export const meta: Route.MetaFunction = () => [{ title: "Admin · oojam build" }
 export async function loader({ request }: Route.LoaderArgs) {
   await requireAdmin(request);
   const db = getDb();
-  const [paused, deployments, pending] = await Promise.all([getPaused(db), recentDeployments(db, 20), pendingWorkerRequest(db)]);
-  return { paused, deployments, pending };
+  const [paused, deployments, pending, week, month] = await Promise.all([
+    getPaused(db),
+    recentDeployments(db, 20),
+    pendingWorkerRequests(db),
+    viralStats(db, 7),
+    viralStats(db, 30),
+  ]);
+  return { paused, deployments, pending, growth: [week, month] };
 }
 
 type Result = { ok: boolean; intent: string; message: string };
+
+/** "12.50" → 1250; null when it isn't a sensible amount (max ±$100,000). */
+function dollarsToCents(raw: FormDataEntryValue | null): number | null {
+  const text = String(raw ?? "").trim().replace(/^\$/, "").replace(/,/g, "");
+  if (!/^-?\d+(\.\d{1,2})?$/.test(text)) return null;
+  const cents = Math.round(Number(text) * 100);
+  return Number.isSafeInteger(cents) && Math.abs(cents) <= 10_000_000 ? cents : null;
+}
 
 export async function action({ request }: Route.ActionArgs) {
   const { user, form } = await requireMutation(request);
@@ -34,7 +50,7 @@ export async function action({ request }: Route.ActionArgs) {
   const target = async () => {
     const login = String(form.get("login") ?? "");
     const u = await userByLogin(db, login);
-    if (!u) throw new LedgerError("not_found", `No oojam user with GitHub login “${login.trim()}”.`);
+    if (!u) throw new RuleError("not_found", `No oojam user with GitHub login “${login.trim()}”.`);
     return u;
   };
 
@@ -66,21 +82,24 @@ export async function action({ request }: Route.ActionArgs) {
         await unbanUser(db, user.id, u.id, reason);
         return ok(`@${u.githubLogin} is unbanned.`);
       }
-      case "adjust": {
-        const u = await target();
-        const dollars = Number(String(form.get("dollars") ?? "").trim());
-        const cents = Math.round(dollars * 100);
-        if (!Number.isFinite(dollars) || cents === 0 || Math.abs(cents) > 100_000) {
-          return fail("Enter a non-zero dollar amount up to ±$1,000 (e.g. 5 or -2.50).");
-        }
-        await adminAdjustWallet(db, user.id, u.id, cents, reason);
-        return ok(`Adjusted @${u.githubLogin}'s wallet by ${signedMoney(cents)}.`);
+      case "contribution": {
+        const cents = dollarsToCents(form.get("dollars"));
+        if (cents === null || cents <= 0) return fail("Enter a positive dollar amount, e.g. 50 or 12.50.");
+        const source = String(form.get("source") ?? "");
+        await recordContribution(db, user.id, cents, source, String(form.get("note") ?? ""));
+        return ok(`Recorded ${money(cents)} from ${source.trim()}.`);
+      }
+      case "adjust_fund": {
+        const cents = dollarsToCents(form.get("dollars"));
+        if (cents === null || cents === 0) return fail("Enter a non-zero dollar amount, e.g. 5 or -2.50.");
+        await adjustFund(db, user.id, cents, reason);
+        return ok(`Adjusted the fund by ${signedMoney(cents)}.`);
       }
       default:
         return fail("Unknown action.");
     }
   } catch (error) {
-    if (error instanceof LedgerError) return fail(error.message);
+    if (error instanceof RuleError) return fail(error.message);
     throw error;
   }
 }
@@ -115,7 +134,9 @@ function Submit({ intent, children, primary = false }: { intent: string; childre
 }
 
 export default function Admin({ loaderData, actionData }: Route.ComponentProps) {
-  const { paused, deployments, pending } = loaderData;
+  const { paused, deployments, pending, growth } = loaderData;
+  // Remount forms after a successful action so they clear.
+  const actionKey = actionData?.ok ? `${actionData.intent}-${actionData.message}` : "form";
   const live = deployments.find((d) => d.status === "live");
 
   return (
@@ -156,12 +177,13 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
           title="Run today's cycle now"
           description="Freezes the top idea and builds it immediately, if today's cycle hasn't run yet. The worker polls for this."
         >
-          {pending && (
-            <Notice tone="jam" className="mb-3">
-              Pending worker request: <strong>{pending.type === "run_cycle" ? "run cycle" : `rollback to #${pending.deploymentId}`}</strong>{" "}
-              since {dateTime(pending.requestedAt)}.
+          {pending.map((p) => (
+            <Notice key={p.type} tone="jam" className="mb-3">
+              Pending worker request:{" "}
+              <strong>{p.type === "run_cycle" ? "run cycle" : `rollback to #${p.deploymentId}`}</strong> since{" "}
+              {dateTime(p.requestedAt)}.
             </Notice>
-          )}
+          ))}
           <Form method="post">
             <CsrfInput />
             <Submit intent="run_cycle">Run today's cycle</Submit>
@@ -188,26 +210,46 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
           </Form>
         </Panel>
 
-        <Panel title="Adjust a wallet" description="Positive to credit, negative to debit. Use for goodwill refunds and corrections.">
-          <Form method="post" className="space-y-3">
+        <Panel
+          title="Record a contribution"
+          description="Money that went into oojam's Anthropic account: sponsors, maintainers. Shown publicly on /fund."
+        >
+          <Form method="post" className="space-y-3" key={`contribution-${actionKey}`}>
             <CsrfInput />
             <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
-              <Field label="GitHub login">
-                <input name="login" required className="field" placeholder="octocat" autoComplete="off" />
+              <Field label="Source (public)">
+                <input name="source" required className="field" placeholder="GitHub Sponsors, October" autoComplete="off" />
               </Field>
               <Field label="Dollars">
-                <input name="dollars" required inputMode="decimal" className="field num" placeholder="5.00" pattern="-?[0-9]+(\.[0-9]{1,2})?" />
+                <input name="dollars" required inputMode="decimal" className="field num" placeholder="50.00" pattern="[0-9]+(\.[0-9]{1,2})?" />
               </Field>
             </div>
-            <Field label="Reason (public)">
-              <input name="reason" required className="field" placeholder="Refund for a double charge" />
+            <Field label="Note (optional, public)">
+              <input name="note" className="field" placeholder="Thanks, @octocat!" />
             </Field>
-            <Submit intent="adjust" primary>
-              Adjust wallet
+            <Submit intent="contribution" primary>
+              Record contribution
             </Submit>
           </Form>
         </Panel>
+
+        <Panel title="Adjust the fund" description="Corrections either way, e.g. an Anthropic invoice that differs from the metered cost.">
+          <Form method="post" className="space-y-3" key={`adjust-${actionKey}`}>
+            <CsrfInput />
+            <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
+              <Field label="Dollars (±)">
+                <input name="dollars" required inputMode="decimal" className="field num" placeholder="-2.50" pattern="-?[0-9]+(\.[0-9]{1,2})?" />
+              </Field>
+              <Field label="Reason (public)">
+                <input name="reason" required className="field" placeholder="October invoice reconciliation" />
+              </Field>
+            </div>
+            <Submit intent="adjust_fund">Adjust fund</Submit>
+          </Form>
+        </Panel>
       </div>
+
+      <Growth stats={growth} />
 
       <section className="mt-12">
         <h2 className="font-display text-xl font-black tracking-tight">Deployments</h2>
@@ -269,5 +311,81 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
         )}
       </section>
     </>
+  );
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+  native: "Share sheet",
+  copy: "Copied link",
+  x: "X",
+  bluesky: "Bluesky",
+  linkedin: "LinkedIn",
+  reddit: "Reddit",
+  hackernews: "Hacker News",
+  email: "Email",
+  embed: "Embed",
+  other: "Other",
+};
+
+function Growth({ stats }: { stats: ViralStats[] }) {
+  return (
+    <section className="mt-12" aria-labelledby="growth-title">
+      <h2 id="growth-title" className="font-display text-xl font-black tracking-tight">
+        Growth
+      </h2>
+      <p className="mt-1 text-sm text-ink-2">
+        Viral coefficient = new accounts that arrived through a share link ÷ accounts that voted in the window. Above 1,
+        oojam grows on its own.
+      </p>
+      <div className="mt-4 grid gap-6 lg:grid-cols-2">
+        {stats.map((g) => {
+          const channels = Object.entries(g.shares).sort((a, b) => b[1] - a[1]);
+          const totalShares = channels.reduce((n, [, c]) => n + c, 0);
+          const max = Math.max(1, ...channels.map(([, c]) => c));
+          return (
+            <div key={g.days} className="card p-5 sm:p-6">
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="kicker">Last {g.days} days</p>
+                <p className="text-right">
+                  <span className="num font-display text-4xl font-black tracking-tight text-jam-ink">{g.kFactor.toFixed(2)}</span>
+                  <span className="ml-1.5 text-xs font-semibold text-ink-3">viral coefficient</span>
+                </p>
+              </div>
+              <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+                {[
+                  ["Shares", totalShares],
+                  ["Ref visits", g.refVisits],
+                  ["Sign-ups via ref", `${g.refSignups} / ${g.newUsers}`],
+                  ["Votes via ref", g.refVotes],
+                  ["Voters", g.voters],
+                  ["New accounts", g.newUsers],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl bg-sunk px-3 py-2">
+                    <dt className="text-xs text-ink-3">{label}</dt>
+                    <dd className="num font-semibold">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <h3 className="mt-5 text-xs font-bold uppercase tracking-wider text-ink-3">Shares by channel</h3>
+              {channels.length === 0 ? (
+                <p className="mt-2 text-sm text-ink-3">No shares yet.</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5">
+                  {channels.map(([ch, n]) => (
+                    <li key={ch} className="grid grid-cols-[7rem_1fr_2.5rem] items-center gap-2 text-sm">
+                      <span className="truncate text-ink-2">{CHANNEL_LABELS[ch] ?? ch}</span>
+                      <span className="h-2 overflow-hidden rounded-full bg-sunk">
+                        <span className="block h-full rounded-full bg-jam" style={{ width: `${(n / max) * 100}%` }} />
+                      </span>
+                      <span className="num text-right font-semibold">{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
