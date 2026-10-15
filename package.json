@@ -1,0 +1,58 @@
+{
+  "name": "oojam-platform",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "react-router dev --host 0.0.0.0 --port 3000",
+    "dev:worker": "tsx watch src/worker/main.ts",
+    "dev:gateway": "tsx watch src/gateway/main.ts",
+    "build": "react-router build && tsc -p tsconfig.server.json",
+    "start": "PORT=${PORT:-3000} react-router-serve ./build/server/index.js",
+    "check": "react-router typegen && tsc && tsc -p tsconfig.server.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.280",
+    "@anthropic-ai/sdk": "0.133.0",
+    "@react-router/node": "7.18.4",
+    "@react-router/serve": "7.18.4",
+    "croner": "10.0.1",
+    "drizzle-orm": "0.45.3",
+    "isbot": "5.2.2",
+    "markdown-it": "15.0.2",
+    "postgres": "3.4.9",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "7.18.4",
+    "stripe": "23.0.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@react-router/dev": "7.18.4",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "22.20.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vite-tsconfig-paths": "6.1.1",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    }
+  }
+}

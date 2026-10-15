@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Apply the platform database's migrations (as platform_owner).
+#
+#   deploy/bin/platform-migrate                # additive migrations only
+#   deploy/bin/platform-migrate --allow-drops  # a migration that drops a table/column/type
+#
+# Runs `node dist/scripts/migrate.js` from the current platform image with
+# DATABASE_URL pointing at platform_owner (the owner role; platform_app can't
+# change the schema).
+#
+# --allow-drops disables the `oojam_block_drops` event trigger in the platform
+# database (as the superuser) for the duration of the migration, and re-enables
+# it however the script exits. The TRUNCATE and bulk-DELETE guards stay on.
+# Never needed for the site database: its migrations are additive by policy.
+source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+
+allow_drops=false
+for arg in "$@"; do
+  case $arg in
+    --allow-drops) allow_drops=true ;;
+    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    *) die "unknown argument: $arg" ;;
+  esac
+done
+
+owner_pw=$(env_get PLATFORM_OWNER_PASSWORD)
+[[ -n $owner_pw ]] || die "PLATFORM_OWNER_PASSWORD is empty in $ENV_FILE"
+# Exported, then passed by name (`-e DATABASE_URL`), so the password never
+# appears on a command line.
+export DATABASE_URL="postgres://platform_owner:${owner_pw}@postgres:5432/platform"
+
+compose up -d postgres >/dev/null
+wait_healthy postgres
+
+reenable() {
+  log "re-enabling oojam_block_drops on platform"
+  if ! su_psql -d platform -c 'ALTER EVENT TRIGGER oojam_block_drops ENABLE'; then
+    printf '\n!!! oojam_block_drops is still DISABLED on the platform database. Fix it now:\n' >&2
+    printf '!!!   docker compose exec postgres psql -U postgres -d platform -c "ALTER EVENT TRIGGER oojam_block_drops ENABLE"\n\n' >&2
+    exit 1
+  fi
+}
+
+if $allow_drops; then
+  confirm drop "This disables the drop guard on the platform database while migrations run. Back up first (docker compose exec backup backup.sh now)."
+  trap reenable EXIT
+  trap 'exit 130' INT TERM
+  log "disabling oojam_block_drops on platform"
+  su_psql -d platform -c 'ALTER EVENT TRIGGER oojam_block_drops DISABLE'
+fi
+
+tty_flag=()
+[[ -t 0 && -t 1 ]] || tty_flag=(-T)
+
+log "running platform migrations"
+compose run --rm --no-deps ${tty_flag[@]+"${tty_flag[@]}"} -e DATABASE_URL platform-web node dist/scripts/migrate.js
+log "platform migrations done"

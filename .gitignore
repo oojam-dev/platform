@@ -1,0 +1,10 @@
+node_modules
+build
+dist
+.react-router
+.env
+deploy/.env
+deploy/secrets/
+*.pem
+builder/node_modules
+builder/dist

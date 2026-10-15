@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Update the running platform to the latest commit on the current branch.
+#
+#   deploy/bin/update-platform           # refuses while a build/smoke container runs
+#   deploy/bin/update-platform --force   # update anyway (the cycle resumes after restart)
+#   deploy/bin/update-platform --no-pull # rebuild and restart the checked-out commit
+#
+# 1. git pull --ff-only (never merges or rewrites local history)
+# 2. docker compose build (platform image, backup image); pull pinned images
+# 3. build the builder image (context builder/): oojam-builder:latest and :<sha12>
+# 4. platform migrations (bin/platform-migrate, additive only)
+# 5. docker compose up -d
+#
+# The previous platform image is kept as oojam-platform:previous for a quick
+# rollback (README › Updating the platform › Rolling back).
+source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+
+force=false
+pull=true
+for arg in "$@"; do
+  case $arg in
+    --force) force=true ;;
+    --no-pull) pull=false ;;
+    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    *) die "unknown argument: $arg" ;;
+  esac
+done
+
+[[ -f $ENV_FILE ]] || die "$ENV_FILE not found (run bin/bootstrap first)"
+
+busy=$(busy_containers)
+if [[ -n $busy ]] && ! $force; then
+  die "a build is running ($(echo "$busy" | tr '\n' ' ')). Wait for it, pause the cycle in /admin, or use --force."
+fi
+
+cd "$PLATFORM_DIR"
+if $pull; then
+  log "git pull --ff-only"
+  before=$(git rev-parse HEAD)
+  git pull --ff-only
+  after=$(git rev-parse HEAD)
+  if [[ $before == "$after" ]]; then
+    log "already at $(git rev-parse --short=12 HEAD)"
+  else
+    git --no-pager log --oneline "$before..$after" | head -n 20
+  fi
+fi
+sha=$(git rev-parse --short=12 HEAD)
+[[ -z $(git status --porcelain --untracked-files=no) ]] || warn "the checkout has local changes; building them as $sha"
+
+check_dockerignore
+
+platform_image=$(env_get PLATFORM_IMAGE)
+platform_image=${platform_image:-oojam-platform:latest}
+if docker image inspect "$platform_image" >/dev/null 2>&1; then
+  docker tag "$platform_image" oojam-platform:previous
+fi
+
+log "building images ($sha)"
+compose pull --quiet caddy postgres egress
+tag_postgres_alias
+compose build --pull platform-web backup
+docker tag "$platform_image" "oojam-platform:$sha"
+
+log "building the builder image"
+build_builder oojam-builder:latest "oojam-builder:$sha"
+
+"$DEPLOY_DIR/bin/platform-migrate"
+
+log "starting the stack"
+compose up -d --remove-orphans
+for service in postgres platform-web gateway; do
+  wait_healthy "$service" 180
+done
+compose ps
+
+# Old images: keep :previous and the tagged ones, drop dangling layers.
+docker image prune -f >/dev/null || true
+log "platform is at $sha"

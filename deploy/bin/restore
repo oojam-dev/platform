@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Restore a pg_dump -Fc backup over the `platform` or `site` database.
+#
+#   deploy/bin/restore                          # list the backups on this server
+#   deploy/bin/restore site /opt/oojam/data/backups/site-20261014.dump
+#   deploy/bin/restore platform /path/to/platform-20261014.dump
+#
+# DESTRUCTIVE: the current database is replaced. Before anything is dropped,
+# the current contents are dumped to $BACKUP_DIR/<db>-prerestore-<time>.dump.
+#
+# Procedure:
+#   1. confirm (type the database name)
+#   2. safety dump of the current database
+#   3. stop what uses it (platform: platform-web + worker; site: the worker
+#      and the live site containers)
+#   4. DROP DATABASE, then pg_restore --create from the dump. --create brings
+#      back the database's privileges (CONNECT grants) and its per-role
+#      settings (statement_timeout etc.) along with the schema and data.
+#   5. re-apply postgres/initdb/02-guards.sql (idempotent), check the grants
+#   6. start everything again
+source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+
+if [[ $# -eq 0 ]]; then
+  echo "Backups in $BACKUP_DIR:"
+  ls -lh "$BACKUP_DIR"/*.dump 2>/dev/null || echo "  (none)"
+  echo
+  echo "usage: $0 <platform|site> <dump-file>"
+  exit 0
+fi
+[[ $# -eq 2 ]] || die "usage: $0 <platform|site> <dump-file>"
+db=$1
+dump=$2
+case $db in
+  platform) owner=platform_owner app=platform_app ;;
+  site) owner=site_migrator app=site_app ;;
+  *) die "database must be platform or site" ;;
+esac
+[[ -f $dump ]] || die "no such file: $dump"
+
+compose up -d postgres >/dev/null
+wait_healthy postgres
+
+log "checking the dump"
+container_dump=/tmp/oojam-restore-$db.dump
+compose cp "$dump" "postgres:$container_dump" >/dev/null
+cleanup_dump() { compose exec -T postgres rm -f "$container_dump" >/dev/null 2>&1 || true; }
+trap cleanup_dump EXIT
+compose exec -T postgres pg_restore --list "$container_dump" >/dev/null || die "$dump is not a readable pg_dump custom-format archive"
+compose exec -T postgres pg_restore --list "$container_dump" | grep -E '^;' | sed -n '1,12p' >&2
+
+confirm "$db" "This REPLACES the '$db' database with $dump. Current data is saved first."
+
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+safety=$BACKUP_DIR/$db-prerestore-$stamp.dump
+log "saving the current '$db' database to $safety"
+mkdir -p "$BACKUP_DIR"
+(umask 077 && compose exec -T postgres pg_dump -U postgres -Fc -d "$db" > "$safety") || die "safety dump failed; nothing was changed"
+
+stopped_sites=()
+log "stopping what uses '$db'"
+if [[ $db == platform ]]; then
+  compose stop platform-web worker
+else
+  compose stop worker
+  mapfile -t stopped_sites < <(docker ps --format '{{.Names}}' | grep -E '^oojam-site-' || true)
+  if ((${#stopped_sites[@]})); then
+    docker stop "${stopped_sites[@]}" >/dev/null
+  fi
+fi
+compose stop backup
+
+restart_all() {
+  log "starting services again"
+  compose up -d
+  if ((${#stopped_sites[@]})); then
+    docker start "${stopped_sites[@]}" >/dev/null || warn "could not start ${stopped_sites[*]}"
+  fi
+}
+
+log "dropping '$db'"
+su_psql -d postgres -v db="$db" <<'SQL'
+DROP DATABASE IF EXISTS :"db" WITH (FORCE);
+SQL
+
+log "restoring '$db' from $dump"
+if ! compose exec -T postgres pg_restore -U postgres --create --dbname postgres --exit-on-error "$container_dump"; then
+  warn "pg_restore failed. The previous contents are in $safety; restore that with: $0 $db $safety"
+  restart_all
+  exit 1
+fi
+
+log "re-applying guards and checking privileges"
+compose exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d "$db" -f /docker-entrypoint-initdb.d/02-guards.sql
+# Belt and braces: the database-level grants 01-init.sh made (pg_restore
+# --create restores them from the dump; this repairs a dump that lacks them).
+su_psql -d postgres -v db="$db" -v owner="$owner" -v app="$app" <<'SQL'
+REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
+GRANT CONNECT, CREATE ON DATABASE :"db" TO :"owner";
+GRANT CONNECT ON DATABASE :"db" TO :"app", backup;
+SQL
+su_psql -d "$db" -At <<'SQL'
+SELECT 'event triggers: ' || string_agg(evtname || '=' || evtenabled::text, ' ' ORDER BY evtname) FROM pg_event_trigger;
+SELECT 'tables: ' || count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'oojam_guard');
+SQL
+
+restart_all
+log "restored '$db' from $dump (previous contents: $safety)"

@@ -1,0 +1,154 @@
+# oojam edge (SPEC §3.1, §5.7).
+#
+# Env (compose passes these explicitly): SITE_DOMAIN (oojam.dev),
+# PLATFORM_DOMAIN (build.oojam.dev), ACME_EMAIL.
+#
+#   {$SITE_DOMAIN}         → site:3000 on oojam_site_net (the live site container,
+#                            created by the worker; alias `site`). Edge-enforced
+#                            security headers; a static "being born" page while
+#                            there is no live site.
+#   www.{$SITE_DOMAIN}     → permanent redirect to {$SITE_DOMAIN}
+#   {$PLATFORM_DOMAIN}     → platform-web:3000 on oojam_edge
+#
+# The admin API listens on localhost inside this container only (no port is
+# published for it and no other container shares its network namespace).
+
+{
+	email {$ACME_EMAIL}
+	admin 127.0.0.1:2019
+	# This is the outermost hop: client-supplied X-Forwarded-* are never trusted,
+	# so upstreams see the real client address in X-Forwarded-For.
+	servers {
+		# Slow-loris and oversized-header protection.
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+		max_header_size 32KB
+	}
+}
+
+# ── SPEC §5.7: the site's headers. Set here, not by the site, so a build can't
+# weaken them. `header_down -X` in the proxy strips whatever the site sends;
+# the deferred `header` block then sets ours on every response (including
+# Caddy's own error pages and the fallback page).
+(site_headers) {
+	header {
+		defer
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Content-Security-Policy-Report-Only
+		-X-Powered-By
+		-Server
+	}
+}
+
+(strip_site_headers) {
+	header_down -Content-Security-Policy
+	header_down -Content-Security-Policy-Report-Only
+	header_down -X-Content-Type-Options
+	header_down -Referrer-Policy
+	header_down -Permissions-Policy
+	header_down -Feature-Policy
+	header_down -Strict-Transport-Security
+	header_down -Cross-Origin-Opener-Policy
+	header_down -X-Powered-By
+	header_down -Server
+}
+
+# ── The platform's headers. CSP is a default only (`?`): if platform-web sends
+# its own (e.g. a nonce-based one), that one is kept. Everything else is forced.
+# form-action allows the two cross-origin redirects that follow a form post:
+# Stripe Checkout (POST /wallet/topup → 303) and GitHub OAuth.
+(platform_headers) {
+	header {
+		defer
+		?Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com https://github.com"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Cross-Origin-Opener-Policy "same-origin"
+		X-Frame-Options "DENY"
+		-X-Powered-By
+		-Server
+	}
+}
+
+# ── oojam.dev: the community-built site ──────────────────────────────────────
+{$SITE_DOMAIN} {
+	import site_headers
+	encode zstd gzip
+
+	request_body {
+		max_size 2MB
+	}
+
+	reverse_proxy site:3000 {
+		import strip_site_headers
+		# During a promotion (SPEC §7 step 5) the alias moves between
+		# containers; retry briefly instead of failing the request.
+		lb_try_duration 5s
+		lb_try_interval 250ms
+		transport http {
+			dial_timeout 2s
+			response_header_timeout 60s
+		}
+	}
+
+	# No live site yet (first boot), or it is down: a friendly static page.
+	handle_errors 502 503 504 {
+		import site_headers
+		header Cache-Control "no-store"
+		header Retry-After "30"
+		root * /srv/fallback
+		rewrite * /index.html
+		file_server
+	}
+}
+
+www.{$SITE_DOMAIN} {
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	redir https://{$SITE_DOMAIN}{uri} permanent
+}
+
+# ── build.oojam.dev: the platform ────────────────────────────────────────────
+{$PLATFORM_DOMAIN} {
+	import platform_headers
+	encode zstd gzip
+
+	# Stripe signs the exact bytes it sends (SPEC §6.5). Caddy streams request
+	# bodies to the upstream untouched (no request buffering or decoding is
+	# configured anywhere here), so the signature verifies against the raw body.
+	handle /stripe/webhook {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy platform-web:3000 {
+			header_down -X-Powered-By
+			header_down -Server
+		}
+	}
+
+	handle {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy platform-web:3000 {
+			header_down -X-Powered-By
+			header_down -Server
+		}
+	}
+
+	handle_errors 502 503 504 {
+		import platform_headers
+		header Content-Type "text/html; charset=utf-8"
+		header Cache-Control "no-store"
+		header Retry-After "30"
+		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>oojam · back soon</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#faf8f5;color:#222}main{max-width:28rem;padding:24px;text-align:center}p{color:#666;line-height:1.5}@media (prefers-color-scheme:dark){body{background:#151413;color:#eee}p{color:#aaa}}</style></head><body><main><h1>build.oojam.dev is restarting</h1><p>It should be back in a minute. Your wallet and votes are safe.</p></main></body></html>` 503
+	}
+}

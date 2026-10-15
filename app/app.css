@@ -1,0 +1,304 @@
+@import "tailwindcss";
+
+/*
+ * oojam build — one accent (jam), warm paper, near-black ink.
+ * Colours are CSS variables so dark mode is a single override below.
+ */
+:root {
+  --paper: #faf6f0;
+  --card: #ffffff;
+  --sunk: #f2ece3;
+  --ink: #1c1714;
+  --ink-2: #574e47;
+  --ink-3: #6f665e;
+  --line: #e6ddd1;
+  --line-strong: #cfc3b4;
+  --jam: #c40e4f;
+  --jam-hover: #a30a41;
+  --jam-soft: #fce8ef;
+  --jam-ink: #8f0a3b;
+  --on-jam: #ffffff;
+  --ok: #1d6b45;
+  --ok-soft: #e3f3ea;
+  --warn: #8a4b00;
+  --warn-soft: #fff1dc;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141110;
+    --card: #1c1816;
+    --sunk: #0f0d0c;
+    --ink: #f5efe9;
+    --ink-2: #bfb4aa;
+    --ink-3: #a1968c;
+    --line: #2f2925;
+    --line-strong: #463d37;
+    --jam: #ff5a8d;
+    --jam-hover: #ff7ba4;
+    --jam-soft: #3b1422;
+    --jam-ink: #ff8db0;
+    --on-jam: #1a0710;
+    --ok: #6fd6a0;
+    --ok-soft: #10291c;
+    --warn: #ffc06b;
+    --warn-soft: #2e2010;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-sunk: var(--sunk);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-jam: var(--jam);
+  --color-jam-hover: var(--jam-hover);
+  --color-jam-soft: var(--jam-soft);
+  --color-jam-ink: var(--jam-ink);
+  --color-on-jam: var(--on-jam);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+}
+
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-display: ui-rounded, "SF Pro Rounded", "Nunito", "Varela Round", "Arial Rounded MT Bold", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::selection {
+    background: var(--jam);
+    color: var(--on-jam);
+  }
+  :focus-visible {
+    outline: 2px solid var(--jam);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  a {
+    text-underline-offset: 3px;
+  }
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .wordmark {
+    font-family: var(--font-display);
+    font-weight: 900;
+    letter-spacing: -0.055em;
+    line-height: 1;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 999px;
+    padding: 0.6rem 1.1rem;
+    font-weight: 650;
+    font-size: 0.9375rem;
+    line-height: 1.2;
+    transition: background-color 120ms, color 120ms, border-color 120ms, transform 80ms;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .btn-jam {
+    background: var(--jam);
+    color: var(--on-jam);
+  }
+  .btn-jam:hover:not(:disabled) {
+    background: var(--jam-hover);
+  }
+  .btn-ghost {
+    border: 1.5px solid var(--line-strong);
+    color: var(--ink);
+    background: transparent;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    border-color: var(--ink);
+  }
+  .btn-sm {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8125rem;
+  }
+
+  .field {
+    display: block;
+    width: 100%;
+    border-radius: 12px;
+    border: 1.5px solid var(--line-strong);
+    background: var(--card);
+    color: var(--ink);
+    padding: 0.65rem 0.8rem;
+    transition: border-color 120ms;
+  }
+  .field:hover {
+    border-color: var(--ink-3);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--jam);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--jam) 25%, transparent);
+  }
+  .label {
+    display: block;
+    font-weight: 650;
+    font-size: 0.875rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .card {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+  }
+
+  .kicker {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  .link {
+    color: var(--jam-ink);
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-decoration-color: color-mix(in oklab, var(--jam) 45%, transparent);
+  }
+  .link:hover {
+    text-decoration-color: var(--jam);
+  }
+
+  /* Rendered Markdown (ideas, build summaries, gate reports). */
+  .prose-oo {
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+  }
+  .prose-oo > * + * {
+    margin-top: 0.9em;
+  }
+  .prose-oo h1,
+  .prose-oo h2,
+  .prose-oo h3,
+  .prose-oo h4 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+    margin-top: 1.4em;
+  }
+  .prose-oo h1 { font-size: 1.35rem; }
+  .prose-oo h2 { font-size: 1.2rem; }
+  .prose-oo h3, .prose-oo h4 { font-size: 1.05rem; }
+  .prose-oo a {
+    color: var(--jam-ink);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklab, var(--jam) 45%, transparent);
+  }
+  .prose-oo ul { list-style: disc; padding-left: 1.4em; }
+  .prose-oo ol { list-style: decimal; padding-left: 1.4em; }
+  .prose-oo li + li { margin-top: 0.25em; }
+  .prose-oo blockquote {
+    border-left: 3px solid var(--jam);
+    padding-left: 1em;
+    color: var(--ink-2);
+  }
+  .prose-oo code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--sunk);
+    border-radius: 6px;
+    padding: 0.1em 0.35em;
+  }
+  .prose-oo pre {
+    background: var(--sunk);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0.9em 1em;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  .prose-oo pre code {
+    background: none;
+    padding: 0;
+  }
+  .prose-oo table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    display: block;
+    overflow-x: auto;
+  }
+  .prose-oo th,
+  .prose-oo td {
+    border-bottom: 1px solid var(--line);
+    padding: 0.4em 0.6em;
+    text-align: left;
+  }
+  .prose-oo hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes oo-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+.pop {
+  animation: oo-pop 260ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pop { animation: none; }
+  * { scroll-behavior: auto !important; }
+}

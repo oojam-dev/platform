@@ -1,0 +1,237 @@
+#cloud-config
+# oojam server, first boot (infra/terraform renders this with templatefile).
+#
+# - `oojam` sudo user with the admin keys; no root login, no passwords over SSH
+# - Docker CE + compose plugin from Docker's apt repository
+# - unattended-upgrades (Ubuntu security + Docker), fail2ban, 4 GB swap
+# - data volume mounted at /opt/oojam/data (Docker waits for it)
+# - DOCKER-USER rules: containers can't reach cloud metadata or SMTP
+# - clones the platform repo into /opt/oojam/platform
+#
+# No secrets here: Hetzner's metadata service serves user-data to anything on
+# the box that asks (containers are blocked from it, below). Secrets go into
+# /opt/oojam/platform/deploy/.env by hand: see /opt/oojam/NEXT-STEPS.txt.
+
+users:
+  - name: oojam
+    gecos: oojam operator
+    shell: /bin/bash
+    groups: [sudo]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+%{ for key in ssh_public_keys ~}
+      - ${key}
+%{ endfor ~}
+
+disable_root: true
+ssh_pwauth: false
+
+timezone: Etc/UTC
+
+swap:
+  filename: /swapfile
+  size: 4294967296
+
+package_update: true
+package_upgrade: true
+
+apt:
+  sources:
+    docker.list:
+      source: "deb [signed-by=$KEY_FILE] https://download.docker.com/linux/ubuntu $RELEASE stable"
+      # Docker Release (CE deb) <docker@docker.com>
+      keyid: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+      keyserver: keyserver.ubuntu.com
+
+packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+  - unattended-upgrades
+  - fail2ban
+  - git
+  - jq
+  - iptables
+
+write_files:
+  # ── sshd: keys only, no root, only the oojam user ──────────────────────────
+  # 00- so it wins over 50-cloud-init.conf (sshd keeps the first value it reads).
+  - path: /etc/ssh/sshd_config.d/00-oojam.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+      AllowUsers oojam
+      MaxAuthTries 3
+      LoginGraceTime 30
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding local
+
+  - path: /etc/fail2ban/jail.d/oojam.local
+    permissions: "0644"
+    content: |
+      [sshd]
+      enabled = true
+      mode = aggressive
+      maxretry = 5
+      findtime = 10m
+      bantime = 1h
+
+  # ── Docker daemon defaults (apply to the worker's dynamic containers too) ──
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "5" },
+        "live-restore": true,
+        "userland-proxy": false,
+        "ip6tables": true
+      }
+
+  # Docker starts only once the data volume is mounted: otherwise Postgres
+  # would initialise a new, empty database on the root disk.
+  - path: /etc/systemd/system/docker.service.d/10-oojam.conf
+    permissions: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor=/opt/oojam/data
+      Wants=oojam-firewall.service
+      After=oojam-firewall.service
+
+      [Service]
+      # Re-applied on every Docker (re)start, e.g. after an unattended upgrade.
+      ExecStartPre=/usr/local/sbin/oojam-firewall
+
+  # ── Container egress rules (DOCKER-USER) ───────────────────────────────────
+  - path: /usr/local/sbin/oojam-firewall
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Container traffic leaving the host goes FORWARD -> DOCKER-USER. Refuse
+      # new connections from containers to:
+      #   - the cloud metadata service (169.254.169.254: serves user-data);
+      #   - SMTP (25, 465, 587/tcp): nothing here sends mail, and a compromised
+      #     container mustn't get the server's IPs blocklisted.
+      # Idempotent: rules live in OOJAM-EGRESS, rebuilt atomically each run,
+      # with one jump to it at the top of DOCKER-USER. The host's own traffic
+      # (INPUT/OUTPUT) is untouched.
+      set -eu
+      rules() {
+        echo '*filter'
+        echo ':OOJAM-EGRESS - [0:0]'
+        echo '-A OOJAM-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN'
+        if [ "$1" = 4 ]; then
+          echo '-A OOJAM-EGRESS -d 169.254.169.254/32 -j REJECT'
+          echo '-A OOJAM-EGRESS -d 169.254.0.0/16 -j REJECT'
+        else
+          echo '-A OOJAM-EGRESS -d fe80::/10 -j REJECT'
+        fi
+        echo '-A OOJAM-EGRESS -p tcp -m multiport --dports 25,465,587 -j REJECT --reject-with tcp-reset'
+        echo 'COMMIT'
+      }
+      apply() { # iptables|ip6tables 4|6
+        ipt=$1
+        "$ipt" -w -n -L DOCKER-USER >/dev/null 2>&1 || "$ipt" -w -N DOCKER-USER
+        rules "$2" | "$ipt-restore" -w --noflush
+        "$ipt" -w -C DOCKER-USER -j OOJAM-EGRESS 2>/dev/null || "$ipt" -w -I DOCKER-USER 1 -j OOJAM-EGRESS
+      }
+      apply iptables 4
+      if ip6tables -w -n -L >/dev/null 2>&1; then
+        apply ip6tables 6
+      fi
+      echo "oojam-firewall: container egress to metadata and SMTP blocked" >&2
+
+  - path: /etc/systemd/system/oojam-firewall.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=oojam container egress rules (DOCKER-USER)
+      Before=docker.service
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/oojam-firewall
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── Automatic security updates ─────────────────────────────────────────────
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+  - path: /etc/apt/apt.conf.d/52oojam-unattended-upgrades
+    permissions: "0644"
+    content: |
+      // Ubuntu's 50unattended-upgrades covers -security. Add Docker's stable
+      // channel; with live-restore, containers survive a dockerd upgrade.
+      Unattended-Upgrade::Origins-Pattern {
+              "origin=Docker,label=Docker CE,archive=$${distro_codename},component=stable";
+      };
+      // Reboot for a new kernel after the nightly backup (03:30 UTC) and well
+      // before the daily cycle (00:00 UTC).
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+  - path: /etc/sysctl.d/60-oojam.conf
+    permissions: "0644"
+    content: |
+      vm.swappiness = 10
+      vm.overcommit_memory = 0
+
+  - path: /opt/oojam/NEXT-STEPS.txt
+    permissions: "0644"
+    content: |
+      oojam server: next steps (full runbook: /opt/oojam/platform/deploy/README.md)
+
+        ssh oojam@<this server>
+        cd /opt/oojam/platform/deploy
+        cp .env.example .env && chmod 600 .env
+        $EDITOR .env                     # domains, ACME_EMAIL, Stripe, GitHub, Anthropic keys
+        $EDITOR secrets/github-app.pem   # the GitHub App's private key (chmod 600)
+        bin/bootstrap                    # generates DB passwords, builds, starts everything
+
+      DNS for ${site_domain}, www.${site_domain} and ${platform_domain} must point here
+      (A and AAAA) before Caddy can get certificates.
+
+runcmd:
+  # Data volume -> /opt/oojam/data. Attached right after the server is created,
+  # so it may not be there yet: wait for it (up to 10 minutes).
+  - [sh, -c, 'mkdir -p /opt/oojam/data']
+  - [sh, -c, 'for i in $(seq 1 120); do [ -e /dev/disk/by-id/scsi-0HC_Volume_${volume_id} ] && break; sleep 5; done']
+  - [sh, -c, 'grep -q "HC_Volume_${volume_id}" /etc/fstab || echo "/dev/disk/by-id/scsi-0HC_Volume_${volume_id} /opt/oojam/data ext4 discard,nofail,defaults 0 2" >> /etc/fstab']
+  - [sh, -c, 'systemctl daemon-reload && mount /opt/oojam/data && mkdir -p /opt/oojam/data/postgres /opt/oojam/data/builds /opt/oojam/data/backups /opt/oojam/data/site-repo && chmod 0700 /opt/oojam/data/backups']
+  # sshd hardening (Ubuntu 24.04: the unit is `ssh`).
+  - [sh, -c, 'sshd -t && systemctl restart ssh']
+  - [systemctl, enable, --now, fail2ban]
+  - [sysctl, --system]
+  # Egress rules, then Docker (picking up daemon.json and the drop-in).
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, oojam-firewall.service]
+  - [systemctl, enable, docker]
+  - [systemctl, restart, docker]
+  - [usermod, -aG, docker, oojam]
+  # The platform checkout, owned by the operator.
+  - [sh, -c, 'mkdir -p /opt/oojam && chown oojam:oojam /opt/oojam']
+  - [sh, -c, '[ -d /opt/oojam/platform/.git ] || sudo -u oojam git clone ${platform_repo} /opt/oojam/platform']
+  - [sh, -c, 'mkdir -p /opt/oojam/platform/deploy/secrets && chown -R oojam:oojam /opt/oojam/platform && chmod 0700 /opt/oojam/platform/deploy/secrets']
+
+final_message: |
+  oojam: cloud-init finished after $UPTIME s. Next steps: /opt/oojam/NEXT-STEPS.txt

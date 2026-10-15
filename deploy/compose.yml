@@ -1,0 +1,391 @@
+# oojam production stack (SPEC §3). One VM, one compose project, run from
+# /opt/oojam/platform/deploy:
+#
+#   docker compose up -d            (bin/bootstrap and bin/update-platform do this for you)
+#
+# Configuration comes from ./.env (see .env.example), used for interpolation
+# only: every service gets an EXPLICIT environment list below, never the whole
+# file. Database URLs are assembled here from the passwords, so each password
+# lives in exactly one place.
+#
+# Not in this file (SPEC §3.2): the live site container (oojam-site-<sha12>,
+# alias `site` on oojam_site_net), builders and smoke-test containers. The
+# worker creates those through the Docker socket and attaches them to the
+# networks below by their fixed names.
+#
+# Third-party images are pinned by digest (the tag says which version). To bump
+# one: docker pull <image>:<new tag>, take the digest from
+# `docker image inspect --format '{{index .RepoDigests 0}}'`, update it here
+# (and in backup/Dockerfile and postgres/test/guards.sh for postgres).
+#
+# Memory on a cpx41 (16 GB): fixed services below ≈ 6.5 GB of limits; the
+# worker's dynamic containers take the rest (builder 4 GB, site 512 MB, smoke
+# test ≈ 2 GB, `docker build` of the site). pids_limit everywhere stops a
+# fork bomb; logs are capped per container (the daemon default in cloud-init
+# caps the dynamic containers too).
+
+name: oojam
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+
+# Settings both platform-web and the worker read (SPEC §8, "core").
+x-core-env: &core-env
+  NODE_ENV: production
+  TZ: UTC
+  PLATFORM_URL: ${PLATFORM_URL:-https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN must be set}}
+  SITE_URL: ${SITE_URL:-https://${SITE_DOMAIN:?SITE_DOMAIN must be set}}
+  DATABASE_URL: postgres://platform_app:${PLATFORM_APP_PASSWORD:?PLATFORM_APP_PASSWORD must be set}@postgres:5432/platform
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  BUILD_FUND_SHARE: ${BUILD_FUND_SHARE:-0.8}
+  MAX_VOTES_PER_USER_PER_IDEA: ${MAX_VOTES_PER_USER_PER_IDEA:-10}
+  BUILD_BUDGET_CAP_USD: ${BUILD_BUDGET_CAP_USD:-25}
+  BUILD_BUDGET_MIN_USD: ${BUILD_BUDGET_MIN_USD:-3}
+  CYCLE_CRON: ${CYCLE_CRON:-0 0 * * *}
+
+services:
+  # ── caddy: TLS, routing, the site's security headers (SPEC §5.7) ──────────
+  caddy:
+    image: caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    restart: unless-stopped
+    logging: *logging
+    <<: *hardening
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 256m
+    mem_reservation: 64m
+    pids_limit: 256
+    oom_score_adj: -500
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN must be set}
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN must be set}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/fallback:/srv/fallback:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+      - site_net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── postgres: db `platform` and db `site`, separate roles (SPEC §3.3) ──────
+  postgres:
+    # Bump within 17 and trixie only: a new major needs dump + restore, and a
+    # new Debian release changes glibc collations (reindex).
+    image: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    restart: unless-stopped
+    logging: *logging
+    <<: *hardening
+    shm_size: 256m
+    mem_limit: 2g
+    mem_reservation: 512m
+    pids_limit: 512
+    oom_score_adj: -800
+    stop_grace_period: 60s
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - max_connections=100
+      - -c
+      - log_min_duration_statement=5000
+      - -c
+      - log_lock_waits=on
+    # The role passwords are used once, by initdb/01-init.sh on first boot.
+    environment:
+      TZ: UTC
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      PLATFORM_OWNER_PASSWORD: ${PLATFORM_OWNER_PASSWORD:?PLATFORM_OWNER_PASSWORD must be set}
+      PLATFORM_APP_PASSWORD: ${PLATFORM_APP_PASSWORD:?PLATFORM_APP_PASSWORD must be set}
+      SITE_MIGRATOR_PASSWORD: ${SITE_MIGRATOR_PASSWORD:?SITE_MIGRATOR_PASSWORD must be set}
+      SITE_APP_PASSWORD: ${SITE_APP_PASSWORD:?SITE_APP_PASSWORD must be set}
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD:?BACKUP_DB_PASSWORD must be set}
+    volumes:
+      # On the Hetzner volume (infra/), not the root disk.
+      - /opt/oojam/data/postgres:/var/lib/postgresql/data
+      # 01-init.sh runs on first boot; it applies 02-guards.sql to both databases.
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - platform_net
+      - site_db_net
+    healthcheck:
+      # Over TCP: during first-boot init the server listens on its socket only,
+      # so this stays unhealthy until init has finished.
+      test: ["CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # ── platform-web: build.oojam.dev ──────────────────────────────────────────
+  platform-web:
+    image: ${PLATFORM_IMAGE:-oojam-platform:latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    # The image's `node` user (the platform Dockerfile sets no USER).
+    user: "1000:1000"
+    <<: *hardening
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    mem_limit: 1g
+    mem_reservation: 256m
+    pids_limit: 256
+    environment:
+      <<: *core-env
+      PORT: "3000"
+      # Host part of PLATFORM_URL (React Router's allowedActionOrigins).
+      PLATFORM_HOST: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN must be set}
+      ADMIN_GITHUB_LOGINS: ${ADMIN_GITHUB_LOGINS:-}
+      # The default CMD is `npm start`; keep npm's cache/logs off the read-only root.
+      npm_config_cache: /tmp/.npm
+      npm_config_update_notifier: "false"
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      SCREEN_MODEL: ${SCREEN_MODEL:-claude-opus-5-5}
+      MIN_GITHUB_ACCOUNT_AGE_DAYS: ${MIN_GITHUB_ACCOUNT_AGE_DAYS:-30}
+    networks:
+      - edge
+      - platform_net
+      - outbound
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── worker: cron, orchestrator, guardrails, deployer (SPEC §2.3, §5, §7) ───
+  worker:
+    image: ${PLATFORM_IMAGE:-oojam-platform:latest}
+    # Built by platform-web's `build:`; never pulled from a registry.
+    pull_policy: never
+    command: ["node", "dist/worker/main.js"]
+    # Root: it drives the Docker socket (root-equivalent anyway) and manages
+    # files in /opt/oojam/data written by containers running as other users.
+    user: "0:0"
+    restart: unless-stopped
+    logging: *logging
+    <<: *hardening
+    mem_limit: 2g
+    mem_reservation: 512m
+    pids_limit: 2048
+    # A crash mid-cycle is fine (the cycle resumes from its recorded state,
+    # SPEC §2.3), but give it time to record where it is.
+    stop_grace_period: 60s
+    environment:
+      <<: *core-env
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
+      SITE_REPO: ${SITE_REPO:-oojam-dev/oojam}
+      # Optional clone URL override (default https://github.com/$SITE_REPO.git).
+      SITE_REPO_URL: ${SITE_REPO_URL:-}
+      # Handed to the site containers the worker starts (they reach postgres
+      # on oojam_site_db_net); never used by the worker against platform data.
+      SITE_DB_MIGRATOR_URL: postgres://site_migrator:${SITE_MIGRATOR_PASSWORD:?SITE_MIGRATOR_PASSWORD must be set}@postgres:5432/site
+      SITE_DB_APP_URL: postgres://site_app:${SITE_APP_PASSWORD:?SITE_APP_PASSWORD must be set}@postgres:5432/site
+      GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8787}
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:-}
+      BUILD_MODEL: ${BUILD_MODEL:-claude-opus-5-5}
+      BUILD_EFFORT: ${BUILD_EFFORT:-high}
+      REVIEW_MODEL: ${REVIEW_MODEL:-claude-opus-5-5}
+      BUILD_TIMEOUT_MIN: ${BUILD_TIMEOUT_MIN:-60}
+      DEP_MIN_AGE_DAYS: ${DEP_MIN_AGE_DAYS:-14}
+      DRY_RUN: ${DRY_RUN:-false}
+      # Paths and images for the containers it creates (SPEC §3.2).
+      OOJAM_DATA_DIR: /opt/oojam/data
+      BUILDER_IMAGE: ${BUILDER_IMAGE:-oojam-builder:latest}
+      POSTGRES_IMAGE: postgres:17.11-trixie@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out: paths it passes to `docker run -v` are host paths.
+      - /opt/oojam/data:/opt/oojam/data
+      - ./secrets/github-app.pem:/run/secrets/github-app.pem:ro
+    networks:
+      - platform_net
+      - outbound
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+      egress:
+        condition: service_started
+    healthcheck:
+      # The worker's job is driving Docker: healthy while it can reach the
+      # daemon through the socket (docker CLI baked into the platform image).
+      test: ["CMD", "docker", "version", "--format", "{{.Server.Version}}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── gateway: Anthropic API proxy and meter for builders (SPEC §4.3) ────────
+  gateway:
+    image: ${PLATFORM_IMAGE:-oojam-platform:latest}
+    pull_policy: never
+    command: ["node", "dist/gateway/main.js"]
+    user: "1000:1000"
+    restart: unless-stopped
+    logging: *logging
+    <<: *hardening
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 512m
+    mem_reservation: 128m
+    pids_limit: 256
+    environment:
+      NODE_ENV: production
+      TZ: UTC
+      GATEWAY_PORT: "8787"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:-}
+    networks:
+      - builder_net
+      - platform_net
+      - outbound
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── egress: CONNECT registry.npmjs.org:443 only (SPEC §4.3) ────────────────
+  egress:
+    image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+    restart: unless-stopped
+    logging: *logging
+    <<: *hardening
+    mem_limit: 256m
+    mem_reservation: 64m
+    pids_limit: 256
+    environment:
+      TZ: UTC
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - builder_net
+      - outbound
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── backup: nightly pg_dump of both databases (SPEC §3.3) ──────────────────
+  backup:
+    image: oojam-backup:local
+    build:
+      context: ./backup
+    restart: unless-stopped
+    logging: *logging
+    <<: *hardening
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 512m
+    mem_reservation: 64m
+    pids_limit: 128
+    environment:
+      TZ: UTC
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: backup
+      PGPASSWORD: ${BACKUP_DB_PASSWORD:?BACKUP_DB_PASSWORD must be set}
+      BACKUP_DIR: /opt/oojam/data/backups
+      BACKUP_TIME: ${BACKUP_TIME:-03:30}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-oojam}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_ENCRYPTION_PASSWORD: ${BACKUP_ENCRYPTION_PASSWORD:-}
+    volumes:
+      - /opt/oojam/data/backups:/opt/oojam/data/backups
+    networks:
+      - platform_net
+      - site_db_net
+      - outbound
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/backup.sh", "health"]
+      interval: 10m
+      timeout: 10s
+      retries: 1
+      start_period: 30s
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+
+# SPEC §3.1. Fixed names: the worker attaches the containers it creates to
+# them by these names. Only `edge` and `outbound` reach the internet.
+networks:
+  # Internet ↔ caddy ↔ platform-web. IPv6 so that Caddy sees IPv6 clients'
+  # real addresses (Docker NATs to the container instead of proxying);
+  # Docker picks a ULA subnet.
+  edge:
+    name: oojam_edge
+    enable_ipv6: true
+  # Outbound internet for the services that need it (Stripe, GitHub,
+  # Anthropic, npm through squid, S3).
+  outbound:
+    name: oojam_outbound
+  # platform-web, worker, gateway, backup ↔ postgres (db `platform`; worker → gateway admin API).
+  platform_net:
+    name: oojam_platform_net
+    internal: true
+  # caddy ↔ the live site container (alias `site`) and the deploy candidate (`site-candidate`).
+  site_net:
+    name: oojam_site_net
+    internal: true
+  # site containers, deploy migrations, backup ↔ postgres (db `site` only, by role).
+  site_db_net:
+    name: oojam_site_db_net
+    internal: true
+  # builders ↔ gateway (Anthropic) and egress (npm). Nothing else.
+  builder_net:
+    name: oojam_builder_net
+    internal: true

@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# First boot of the oojam stack on a fresh server (safe to re-run).
+#
+#   deploy/bin/bootstrap
+#
+# 1. .env: created from .env.example if missing; every generated secret that is
+#    still empty gets 64 random hex characters. Then checks the values you must
+#    fill in yourself, and stops (listing them) while any is missing.
+# 2. secrets/github-app.pem must exist (the GitHub App's private key).
+# 3. /opt/oojam/data must be the data volume; creates postgres/, builds/,
+#    backups/, site-repo/ on it.
+# 4. Docker sanity: daemon, compose plugin, the DOCKER-USER egress rules, and
+#    no foreign networks squatting on oojam_* names.
+# 5. Builds the images, starts postgres (first boot runs initdb/01-init.sh),
+#    runs platform migrations and starts everything.
+source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+
+GENERATED=(POSTGRES_PASSWORD PLATFORM_OWNER_PASSWORD PLATFORM_APP_PASSWORD SITE_MIGRATOR_PASSWORD
+  SITE_APP_PASSWORD BACKUP_DB_PASSWORD SESSION_SECRET GATEWAY_ADMIN_TOKEN)
+REQUIRED=(SITE_DOMAIN PLATFORM_DOMAIN ACME_EMAIL ANTHROPIC_API_KEY GITHUB_OAUTH_CLIENT_ID
+  GITHUB_OAUTH_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID)
+DB_PASSWORDS=(POSTGRES_PASSWORD PLATFORM_OWNER_PASSWORD PLATFORM_APP_PASSWORD SITE_MIGRATOR_PASSWORD
+  SITE_APP_PASSWORD BACKUP_DB_PASSWORD)
+
+# ── 1. .env ─────────────────────────────────────────────────────────────────
+if [[ ! -f $ENV_FILE ]]; then
+  log "creating $ENV_FILE from .env.example"
+  (umask 077 && cp "$DEPLOY_DIR/.env.example" "$ENV_FILE")
+fi
+chmod 0600 "$ENV_FILE"
+
+for name in "${GENERATED[@]}"; do
+  if [[ -z $(env_get "$name") ]]; then
+    env_set "$name" "$(random_secret)"
+    log "generated $name"
+  fi
+done
+
+for name in "${DB_PASSWORDS[@]}"; do
+  [[ $(env_get "$name") =~ ^[A-Za-z0-9._~-]{16,}$ ]] \
+    || die "$name must be at least 16 URL-safe characters (A-Z a-z 0-9 . _ ~ -): it goes into postgres:// URLs"
+done
+
+missing=()
+for name in "${REQUIRED[@]}"; do
+  [[ -n $(env_get "$name") ]] || missing+=("$name")
+done
+if ((${#missing[@]})); then
+  printf '\nFill these in %s, then run %s again:\n' "$ENV_FILE" "$0" >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  printf '(README.md › First-time setup says where each one comes from.)\n' >&2
+  exit 1
+fi
+[[ $(env_get STRIPE_SECRET_KEY) == sk_live_* ]] || warn "STRIPE_SECRET_KEY is not a live key (sk_live_…)"
+[[ $(env_get DRY_RUN) == true ]] && warn "DRY_RUN=true: the cycle runs but never pushes, merges or deploys (set false when ready)"
+
+# ── 2. GitHub App key ───────────────────────────────────────────────────────
+pem=$DEPLOY_DIR/secrets/github-app.pem
+mkdir -p "$DEPLOY_DIR/secrets"
+chmod 0700 "$DEPLOY_DIR/secrets"
+if [[ -d $pem ]]; then
+  die "$pem is a directory (Docker creates one when the file is missing). Remove it and save the key there."
+fi
+[[ -f $pem ]] || die "save the GitHub App's private key as $pem (README › GitHub App)"
+grep -q 'PRIVATE KEY-----' "$pem" || die "$pem doesn't look like a PEM private key"
+chmod 0600 "$pem"
+
+# ── 3. Data volume ──────────────────────────────────────────────────────────
+if ! mountpoint -q "$DATA_DIR" 2>/dev/null; then
+  if [[ ${OOJAM_ALLOW_ROOT_DISK:-} == 1 ]]; then
+    warn "$DATA_DIR is not a mount point; using the root disk (OOJAM_ALLOW_ROOT_DISK=1)"
+  else
+    die "$DATA_DIR is not mounted (the Hetzner volume, infra/). Set OOJAM_ALLOW_ROOT_DISK=1 to use the root disk anyway."
+  fi
+fi
+for d in postgres builds backups site-repo; do
+  [[ -d $DATA_DIR/$d ]] || { mkdir -p "$DATA_DIR/$d" 2>/dev/null || sudo mkdir -p "$DATA_DIR/$d"; }
+done
+chmod 0700 "$DATA_DIR/backups" 2>/dev/null || sudo chmod 0700 "$DATA_DIR/backups"
+
+# ── 4. Docker sanity ────────────────────────────────────────────────────────
+docker info >/dev/null 2>&1 || die "can't talk to Docker (is it running, and are you in the docker group?)"
+docker compose version >/dev/null 2>&1 || die "the docker compose plugin is missing"
+if command -v iptables >/dev/null && sudo -n true 2>/dev/null; then
+  sudo iptables -w -S DOCKER-USER 2>/dev/null | grep -q OOJAM-EGRESS \
+    || warn "the DOCKER-USER egress rules (oojam-firewall.service) are not active: containers could reach cloud metadata and SMTP"
+fi
+for net in oojam_edge oojam_outbound oojam_platform_net oojam_site_net oojam_site_db_net oojam_builder_net; do
+  if docker network inspect "$net" >/dev/null 2>&1; then
+    project=$(docker network inspect -f '{{index .Labels "com.docker.compose.project"}}' "$net")
+    [[ $project == oojam ]] || die "network $net exists but wasn't created by this compose project (project='$project'); remove it first"
+  fi
+done
+compose config -q || die "compose.yml doesn't validate with $ENV_FILE"
+
+# ── 5. Build and start ──────────────────────────────────────────────────────
+check_dockerignore
+sha=$(git -C "$PLATFORM_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+
+log "pulling pinned images, building platform and backup images"
+compose pull --quiet caddy postgres egress
+tag_postgres_alias
+compose build platform-web backup
+log "building the builder image"
+build_builder oojam-builder:latest "oojam-builder:$sha"
+
+first_boot=false
+[[ -n $(ls -A "$DATA_DIR/postgres" 2>/dev/null || sudo ls -A "$DATA_DIR/postgres" 2>/dev/null) ]] || first_boot=true
+log "starting postgres$($first_boot && echo ' (first boot: creating roles, databases and guards)')"
+compose up -d postgres
+wait_healthy postgres 300
+
+"$DEPLOY_DIR/bin/platform-migrate"
+
+log "starting the stack"
+compose up -d --remove-orphans
+for service in platform-web gateway egress caddy; do
+  wait_healthy "$service" 180
+done
+compose ps
+
+cat >&2 <<EOF
+
+${_bold}oojam is up.${_reset}
+  https://$(env_get PLATFORM_DOMAIN)/healthz   platform
+  https://$(env_get SITE_DOMAIN)/              "being born" page until the first deploy
+
+Next (README.md):
+  - sign in at https://$(env_get PLATFORM_DOMAIN)/ and make yourself admin
+  - take a first backup:     docker compose exec backup backup.sh now
+  - copy deploy/.env and secrets/github-app.pem to your password manager
+  - when a DRY_RUN cycle looks right, set DRY_RUN=false and: docker compose up -d worker
+EOF
