@@ -42,18 +42,23 @@ export function git(repo: Repo, args: string[], opts: { input?: string; env?: Re
         GIT_ATTR_NOSYSTEM: "1",
         ...opts.env,
       },
-      stdio: ["pipe", "pipe", "pipe"],
+      // Only open stdin when there's input: a fast command can exit before we close an unused
+      // pipe, and the EPIPE that follows is an unhandled 'error' that kills the process.
+      stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
-    child.stdout.on("data", (b: Buffer) => out.push(b));
-    child.stderr.on("data", (b: Buffer) => err.push(b));
+    child.stdout!.on("data", (b: Buffer) => out.push(b));
+    child.stderr!.on("data", (b: Buffer) => err.push(b));
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve(Buffer.concat(out).toString("utf8"));
       else reject(new Error(`git ${args[0]} failed (${code}): ${Buffer.concat(err).toString("utf8").trim()}`));
     });
-    child.stdin.end(opts.input ?? "");
+    if (child.stdin) {
+      child.stdin.on("error", () => {}); // the exit code reports any real failure
+      child.stdin.end(opts.input);
+    }
   });
 }
 

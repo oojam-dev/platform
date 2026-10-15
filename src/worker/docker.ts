@@ -10,7 +10,8 @@ export interface RunResult {
 
 export function docker(args: string[], opts: { input?: string; timeoutMs?: number; allowFail?: boolean } = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+    // stdin only when there's input (see guardrails/git.ts: an unused pipe can EPIPE).
+    const child = spawn("docker", args, { stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let timedOut = false;
@@ -20,8 +21,8 @@ export function docker(args: string[], opts: { input?: string; timeoutMs?: numbe
           child.kill("SIGKILL");
         }, opts.timeoutMs)
       : undefined;
-    child.stdout.on("data", (b: Buffer) => out.push(b));
-    child.stderr.on("data", (b: Buffer) => err.push(b));
+    child.stdout!.on("data", (b: Buffer) => out.push(b));
+    child.stderr!.on("data", (b: Buffer) => err.push(b));
     child.on("error", reject);
     child.on("close", (code) => {
       if (timer) clearTimeout(timer);
@@ -29,7 +30,10 @@ export function docker(args: string[], opts: { input?: string; timeoutMs?: numbe
       if (r.code !== 0 && !opts.allowFail) reject(new DockerError(args, r));
       else resolve(r);
     });
-    child.stdin.end(opts.input ?? "");
+    if (child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(opts.input);
+    }
   });
 }
 

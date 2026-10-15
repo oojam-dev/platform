@@ -88,6 +88,7 @@ export async function exportCommit(dirs: BuildDirs, sha: string): Promise<string
   await new Promise<void>((resolve, reject) => {
     const p = spawn("tar", ["-x", "--no-same-owner", "--no-same-permissions", "-C", out], { stdio: ["pipe", "ignore", "pipe"] });
     p.on("close", (c) => (c === 0 ? resolve() : reject(new Error(`tar failed: ${c}`))));
+    p.stdin.on("error", reject);
     p.stdin.end(tar);
   });
   return out;
