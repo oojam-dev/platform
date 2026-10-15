@@ -13,7 +13,7 @@ import { eq, sql } from "drizzle-orm";
 import { hideComment } from "../src/core/admin.js";
 import { createSession } from "../src/core/auth.js";
 import { addComment } from "../src/core/ideas.js";
-import { adjustFund, chargeBuild, chargeScreening, recordContribution } from "../src/core/fund.js";
+import { chargeBuild, chargeScreening } from "../src/core/spend.js";
 import { recordRefVisit, recordShare, setReferrer } from "../src/core/referrals.js";
 import { postIdea, rejectAtScreening, vote } from "../src/core/votes.js";
 import { closeDb, getDb } from "../src/db/client.js";
@@ -162,9 +162,6 @@ async function main() {
   for (let i = 0; i < 6; i++) await recordRefVisit(db, { ideaId: second.id, referrerLogin: "octocat" });
 
   // The fund: contributions in, builds and screening out.
-  await recordContribution(db, octo.id, 5_000, "Maintainers", "Seed money to get things going");
-  await recordContribution(db, octo.id, 2_500, "GitHub Sponsors, September");
-  await recordContribution(db, octo.id, 1_000, "@jamfan via GitHub Sponsors", "Thank you!");
   for (let i = 0; i < 9; i++) await chargeScreening(db, 3, `Screening idea ${i + 1}`);
 
   const log = (start: Date, steps: [string, string][]): BuildLogEntry[] =>
@@ -242,7 +239,6 @@ async function main() {
     .returning();
   await chargeBuild(db, okBuild!.id, 437, "Build spend (1 attempt)");
   await db.update(ideas).set({ status: "deployed", frozenAt: daysAgo(1), decidedAt: daysAgo(1, -1) }).where(eq(ideas.id, built.id));
-  await adjustFund(db, octo.id, -120, "September Anthropic invoice was $1.20 above metered cost");
 
   await db.insert(deployments).values([
     { sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", container: "oojam-site-a1b2c3d4e5f6", status: "retired", createdAt: daysAgo(8), promotedAt: daysAgo(8) },

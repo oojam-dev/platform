@@ -5,7 +5,7 @@ import type { Database, DbOrTx } from "../db/client.js";
 import { builds, comments, ideas, users, votes, type IdeaStatus } from "../db/schema.js";
 import { audit } from "./controls.js";
 import { RuleError } from "./errors.js";
-import { chargeScreening } from "./fund.js";
+import { budgetLeftTodayCents, chargeScreening } from "./spend.js";
 import { rejectAtScreening } from "./votes.js";
 import { usdToCents } from "./pricing.js";
 import { screenIdea } from "./screen.js";
@@ -121,6 +121,8 @@ export async function screenAndApply(db: Database, ideaId: number): Promise<"all
   const [idea] = await db.select().from(ideas).where(eq(ideas.id, ideaId));
   if (!idea) return "error";
   if (idea.screenVerdict || idea.status !== "open") return idea.screenVerdict?.allowed ? "allowed" : "rejected";
+  // Today's budget is spent: leave it unscreened; the worker retries after 00:00 UTC.
+  if ((await budgetLeftTodayCents(db)) <= 0) return "error";
   let result;
   try {
     result = await screenIdea(idea);

@@ -91,19 +91,18 @@ Branch protection on `oojam-dev/oojam` `main` (Settings → Branches, or a rules
 
 ### 5. Sponsorship (optional)
 
-oojam takes no payments. Voting is free; builds are paid for from the build fund, which the
-maintainers and sponsors top up.
+oojam takes no payments, and voting is free. Claude's cost is capped at `DAILY_BUDGET_USD` ($10) per
+UTC day, metered by the gateway and shown on `/costs`. The Anthropic workspace's own spend limit is the
+hard ceiling behind it.
 
-- Enable GitHub Sponsors for the `oojam-dev` org (github.com/sponsors). `.github/FUNDING.yml` in both
-  repos already points at it, and `SPONSOR_URL` sets where the "Sponsor" links on both sites go.
-- When money goes into the Anthropic account for oojam, record it in `/admin` → **Record a
-  contribution**, so `/fund` stays accurate. Sponsorship never buys votes.
+Enable GitHub Sponsors for the `oojam-dev` org (github.com/sponsors). `.github/FUNDING.yml` in both repos
+already points at it, and `SPONSOR_URL` sets where the "Sponsor" links go. Sponsorship never buys votes.
 
 ### 6. Anthropic
 
-Console → create a workspace for oojam with a **monthly spend limit** (a little above what the build fund
-could ever spend: `BUILD_BUDGET_CAP_USD` × 2 attempts × 31 days + review and screening) → API key →
-`ANTHROPIC_API_KEY`. The gateway enforces per-build budgets; the workspace limit is the backstop.
+Console → create a workspace for oojam with a **monthly spend limit** a little above
+`DAILY_BUDGET_USD` × 31 (about $320 at $10/day) → API key → `ANTHROPIC_API_KEY`. oojam enforces the daily
+cap itself; the workspace limit is the backstop.
 
 ### 7. Configure and start
 
@@ -225,8 +224,7 @@ first, stops what uses it (platform: web + worker; site: worker + the live site 
 database, `pg_restore --create`s the dump (which brings back the grants and per-role settings), re-applies
 the guards, and starts everything again. If `pg_restore` fails it says how to put the saved copy back.
 
-Restoring the platform DB rewinds votes, ideas and the fund ledger to the dump's time; re-record any
-contributions made since, from `/transparency`.
+Restoring the platform DB rewinds votes, ideas and the spend ledger to the dump's time.
 
 **Test a restore** every few months: `bin/restore` on a staging box, or restore into a scratch container:
 ```sh

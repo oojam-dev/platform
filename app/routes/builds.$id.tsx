@@ -139,7 +139,7 @@ export default function BuildPage({ loaderData }: Route.ComponentProps) {
             >
               <div className={`h-full rounded-full ${over ? "bg-warn" : "bg-jam"}`} style={{ width: `${pct}%` }} />
             </div>
-            <p className="mt-2 text-xs text-ink-3">Paid from the build fund. Metered per token by the gateway.</p>
+            <p className="mt-2 text-xs text-ink-3">Counts towards the day's budget. Metered per token by the gateway.</p>
           </div>
           <dl className="card divide-y divide-line text-sm">
             {build.prUrl && (

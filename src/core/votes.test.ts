@@ -5,7 +5,8 @@ import { freshDb, hasDb, makeUser } from "../../tests/helpers/db.js";
 import type { Database } from "../db/client.js";
 import { ideas, votes } from "../db/schema.js";
 import { RuleError } from "./errors.js";
-import { adjustFund, chargeBuild, fundBalance, recordContribution } from "./fund.js";
+import { budgetLeftTodayCents, chargeBuild, chargeScreening, spentSinceCents } from "./spend.js";
+import { fundEntries } from "../db/schema.js";
 import { listVoters, postIdea, postsToday, rejectAtScreening, unvote, validateIdea, vote, votedOn } from "./votes.js";
 import { recordRefVisit, recordShare, referralSummary, setReferrer, viralStats } from "./referrals.js";
 
@@ -22,7 +23,7 @@ describe("validateIdea", () => {
 const screened = { allowed: true, category: "ok", reason: "", model: "test", at: new Date().toISOString() };
 const rejected = { allowed: false, category: "illegal", reason: "No.", model: "test", at: new Date().toISOString() };
 
-describe.skipIf(!hasDb)("votes, referrals and fund (postgres)", () => {
+describe.skipIf(!hasDb)("votes, referrals and spend (postgres)", () => {
   let db: Database;
   let close: () => Promise<void>;
   beforeAll(async () => ({ db, close } = await freshDb()));
@@ -129,14 +130,15 @@ describe.skipIf(!hasDb)("votes, referrals and fund (postgres)", () => {
     expect(stats.kFactor).toBeGreaterThan(0);
   });
 
-  it("the fund is contributions minus spend", async () => {
-    const admin = await makeUser(db, { isAdmin: true });
-    const before = await fundBalance(db);
-    await recordContribution(db, admin.id, 10_000, "GitHub Sponsors, October");
-    await chargeBuild(db, 1, 421, "test build");
-    await adjustFund(db, admin.id, -79, "Rounding correction");
-    expect(await fundBalance(db)).toBe(before + 10_000 - 421 - 79);
-    await expect(recordContribution(db, admin.id, 0, "x")).rejects.toThrow(RuleError);
-    await expect(recordContribution(db, admin.id, 100, " ")).rejects.toThrow(RuleError);
+  it("caps spend per UTC day, across builds and screening", async () => {
+    const yesterday = new Date(Date.now() - 86_400_000);
+    await db.insert(fundEntries).values({ deltaCents: -900, kind: "build_spend", buildId: 99, note: "yesterday", createdAt: yesterday });
+    expect(await budgetLeftTodayCents(db)).toBe(1_000);
+    await chargeBuild(db, 1, 640, "today's build");
+    await chargeScreening(db, 35, "an idea");
+    expect(await budgetLeftTodayCents(db)).toBe(325);
+    await chargeBuild(db, 1, 900, "over budget");
+    expect(await budgetLeftTodayCents(db)).toBe(0);
+    expect(await spentSinceCents(db, new Date(Date.now() - 2 * 86_400_000))).toBe(900 + 640 + 35 + 900);
   });
 });

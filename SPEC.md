@@ -15,7 +15,7 @@ disagree, fix one of them in the same change.
 | Repo | Licence | What | Who changes it |
 |---|---|---|---|
 | `oojam-dev/oojam` (local: `../site`) | MIT | **The site**: oojam.dev. React Router v7, Tailwind v4, Drizzle, Postgres. | The **builder**, once a day, through guarded PRs. Maintainers in emergencies. |
-| `oojam-dev/platform` (this repo) | MIT | **The machine**: build.oojam.dev (accounts, ideas, votes, the build fund), the daily cycle, the builder, guardrails, deploy, infra. | Maintainers only. **The builder never sees or touches it.** |
+| `oojam-dev/platform` (this repo) | MIT | **The machine**: build.oojam.dev (accounts, ideas, votes, sharing, the daily spend cap), the daily cycle, the builder, guardrails, deploy, infra. | Maintainers only. **The builder never sees or touches it.** |
 
 The wall between them is the most important property of the system. If the builder
 could change voting or the guardrails, the community could vote its way past them
@@ -35,11 +35,16 @@ could change voting or the guardrails, the community could vote its way past the
 oojam takes **no payments**: it's a bit of fun, not a business.
 - Voting is free and tied to your GitHub account: **one vote per account per idea**, on as many
   ideas as you like, and voters are public.
-- Builds are paid for from the **build fund**:
-  - money goes in as maintainer and sponsor **contributions**, which admins record;
-  - money comes out as **build spend** and **screening** costs.
-- Sponsorship goes through GitHub Sponsors (`SPONSOR_URL`). It **never buys votes**.
-- Everything is public on `/fund`: contributions, spend per build, and the balance.
+- Claude is the only real cost. oojam spends at most **`DAILY_BUDGET_USD` ($10) per UTC day**, across
+  the build, its review and idea screening.
+  - Spend is metered per token by the gateway and recorded as append-only entries (`fund_entries`,
+    kinds `build_spend`, `screening` and `adjustment`).
+  - The 00:00 build gets the day's budget minus a 50¢ screening reserve.
+  - If less than `BUILD_BUDGET_MIN_USD` ($3) is free, the day is skipped and the idea waits.
+  - When the day's budget is spent, screening waits until 00:00 UTC.
+- The Anthropic workspace spend limit is the hard ceiling outside oojam.
+- Sponsorship goes through GitHub Sponsors (`SPONSOR_URL`) and **never buys votes**.
+- Everything is public on `/costs`: today, this month, all time, and the cost of each build.
 
 ### 2.2 Ideas, votes and sharing
 
@@ -69,9 +74,9 @@ oojam takes **no payments**: it's a bit of fun, not a business.
 ### 2.3 The daily cycle (00:00 UTC)
 
 1. **Freeze.** The top `open` idea becomes `frozen` and its votes are locked.
-2. **Fund check.** The build budget is `min(fund balance, BUILD_BUDGET_CAP_USD = $10)`.
-   If it's below `BUILD_BUDGET_MIN_USD` ($3), the day is `skipped`, the idea goes back to
-   `open`, and the board shows why.
+2. **Budget check.** The build budget is what's left of today's `DAILY_BUDGET_USD` ($10), minus a
+   50¢ screening reserve. If that's below `BUILD_BUDGET_MIN_USD` ($3), the day is `skipped`, the idea
+   goes back to `open`, and the board shows why.
 3. **Pre-build screen.** Claude screens the idea again with today's site in view. If it's
    now out of policy, the idea is `rejected` (votes aren't returned, because it was voted through) and
    the runner-up is frozen instead, up to 3 times.
@@ -410,7 +415,7 @@ stored on its own.
 
 - `users(id, github_id unique, github_login, name, avatar_url, github_created_at, is_admin, banned_at, banned_reason, referred_by?, created_at)`
 - `sessions(id text pk = sha256(token), user_id, expires_at, created_at)`
-- `fund_entries(id, delta_cents, kind: contribution|build_spend|screening|adjustment, source, build_id?, actor_id?, note, created_at)`
+- `fund_entries(id, delta_cents, kind: build_spend|screening|adjustment, source, build_id?, actor_id?, note, created_at)`, the spend ledger. The table name and its unused `contribution` kind and `source` column are left over from an earlier funding model.
 - `ideas(id, author_id, title, body, status: open|frozen|building|deployed|failed|rejected|withdrawn, vote_count, screen_verdict jsonb, rejected_reason, frozen_at, decided_at, created_at)`
 - `votes(id, idea_id, user_id, referrer_id?, created_at)`, unique on `(idea_id, user_id)`.
 - `shares(id, idea_id, user_id?, channel, created_at)` and `ref_visits(id, idea_id?, referrer_id, created_at)`.
@@ -420,7 +425,7 @@ stored on its own.
 - `controls(key pk, value jsonb, updated_by, updated_at)`. Keys: `paused` `{paused: bool, reason}`.
 - `audit_log(id, actor_id?, action, subject, data jsonb, created_at)`
 
-### 6.3 Vote and fund operations (`src/core/votes.ts`, `src/core/referrals.ts`, `src/core/fund.ts`)
+### 6.3 Vote and spend operations (`src/core/votes.ts`, `src/core/referrals.ts`, `src/core/spend.ts`)
 
 Each vote operation is a single transaction, and `votes(idea_id, user_id)` is unique, so a vote
 counts once however many times it's sent.
@@ -436,8 +441,7 @@ counts once however many times it's sent.
   `open` and screened, insert or delete the vote, and adjust `vote_count`. Both are idempotent.
 - `recordShare`, `recordRefVisit`, `setReferrer`, `referralSummary`, `topSharers` and
   `viralStats`: the sharing loop.
-- `recordContribution`, `adjustFund` (admin), plus `chargeBuild` and `chargeScreening` (system):
-  append fund entries.
+- `chargeBuild`, `chargeScreening` and `budgetLeftTodayCents` (`src/core/spend.ts`): the daily cap.
 
 ### 6.4 Admin
 
@@ -448,21 +452,21 @@ counts once however many times it's sent.
   - ban users;
   - run today's cycle now;
   - roll back to a previous deployment;
-  - record contributions and fund adjustments.
 - Every admin action goes to `audit_log`, and the audit log is public at `/transparency`.
 
 ### 6.5 Sponsorship
 
 There are no payments in the app. "Sponsor oojam" links on both sites go to `SPONSOR_URL`, which is
-GitHub Sponsors for `oojam-dev`. Admins record what reaches the build fund on `/admin`.
+GitHub Sponsors for `oojam-dev`.
 
 ### 6.6 Routes
 
 `/` board (Top · New · Built) · `/ideas/new` · `/ideas/:id` · `/builds` · `/builds/:id` ·
-`/account` · `/fund` · `/rules` · `/transparency` · `/admin` · `/auth/github` ·
+`/account` · `/costs` · `/rules` · `/transparency` · `/admin` · `/auth/github` ·
 `/auth/github/callback` · `/auth/logout` · `/healthz`.
 
-The header shows the fund balance, a countdown to the next build, a Sponsor link and the paused
+The oojam wordmark links to oojam.dev, and the "build" pill to the board. The header also shows
+today's spend against the daily budget, a countdown to the next build, a Sponsor link and the paused
 banner. The board's hero has a large live countdown to the next
 build. oojam.dev shows one too.
 
@@ -507,7 +511,7 @@ and rollback never touches data.
 | `GATEWAY_URL` / `GATEWAY_ADMIN_TOKEN` | `http://gateway:8787` | worker, gateway |
 | `MAX_IDEAS_PER_DAY` | `1` | core |
 | `SPONSOR_URL` | `https://github.com/sponsors/oojam-dev` | core |
-| `BUILD_BUDGET_CAP_USD` / `BUILD_BUDGET_MIN_USD` | `10` / `3` | worker |
+| `DAILY_BUDGET_USD` / `BUILD_BUDGET_MIN_USD` | `10` / `3` | worker, web |
 | `BUILD_MODEL` / `BUILD_EFFORT` | `claude-opus-5-5` / `high` | worker |
 | `REVIEW_MODEL` / `SCREEN_MODEL` | `claude-opus-5-5` | worker / web |
 | `BUILD_TIMEOUT_MIN` | `60` | worker |

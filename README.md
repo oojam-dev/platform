@@ -13,7 +13,7 @@ The machine behind [oojam.dev](https://oojam.dev), a website with no designated 
 | Path | What |
 |---|---|
 | `app/` | build.oojam.dev: the board, ideas, votes, fund, rules, admin (React Router v7). |
-| `src/core/` | Domain logic: votes, the build fund, ideas and screening, auth, controls, policy. |
+| `src/core/` | Domain logic: votes, sharing, the daily spend cap, ideas and screening, auth, controls, policy. |
 | `src/db/` | Drizzle schema and client for the `platform` database; migrations in `drizzle/`. |
 | `src/guardrails/` | Host-side checks on every build: protected paths, additive-only migrations, dependency vetting, secrets, code patterns, and the independent Claude review. |
 | `src/gateway/` | Anthropic API proxy. Builders get a per-build token, never the key, and their spend is metered and capped. |

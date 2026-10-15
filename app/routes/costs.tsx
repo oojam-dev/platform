@@ -1,54 +1,43 @@
 import { Link } from "react-router";
 
 import { config } from "../../src/core/config.js";
-import { fundSummary, listBuilds, listContributions } from "../../src/core/stats.js";
+import { costSummary, listBuilds } from "../../src/core/stats.js";
 import { getDb } from "../../src/db/client.js";
 import { PageTitle, SponsorCard, Stat, StatusChip } from "../components/ui";
-import { day, money, signedMoney } from "../lib/format";
-import type { Route } from "./+types/fund";
+import { day, money } from "../lib/format";
+import type { Route } from "./+types/costs";
 
-export const meta: Route.MetaFunction = () => [{ title: "The fund · oojam build" }];
+export const meta: Route.MetaFunction = () => [{ title: "Costs · oojam build" }];
 
 export async function loader() {
   const db = getDb();
-  const [summary, builds, contributions] = await Promise.all([fundSummary(db), listBuilds(db, 365), listContributions(db, 100)]);
+  const [summary, builds] = await Promise.all([costSummary(db), listBuilds(db, 365)]);
   return {
     summary,
     builds,
-    contributions,
-    capUsd: config.buildBudgetCapUsd,
+    dailyUsd: config.dailyBudgetUsd,
     minUsd: config.buildBudgetMinUsd,
     sponsorUrl: config.sponsorUrl,
   };
 }
 
-export default function Fund({ loaderData }: Route.ComponentProps) {
-  const { summary: s, builds, contributions, capUsd, minUsd, sponsorUrl } = loaderData;
+export default function Costs({ loaderData }: Route.ComponentProps) {
+  const { summary: s, builds, dailyUsd, minUsd, sponsorUrl } = loaderData;
+  const leftToday = Math.max(0, s.dailyBudgetCents - s.todayCents);
 
   return (
     <>
-      <PageTitle kicker="Open books" title="The build fund">
-        Voting on oojam is free. The only thing that costs money is Claude doing the building, and that's paid from
-        this fund: Anthropic credits donated by sponsors and the maintainers. Every dollar in and out is listed here.
+      <PageTitle kicker="Open books" title="What oojam costs">
+        Voting on oojam is free. The only thing that costs money is Claude: screening new ideas, building the winner
+        and reviewing the result. oojam spends at most {money(dailyUsd * 100)} a day on it, and every cent is listed here.
       </PageTitle>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Stat accent label="Fund balance" value={money(s.balanceCents)} hint={`Pays for builds, up to ${money(capUsd * 100)} each`} />
-        <Stat label="Total contributed" value={money(s.contributedCents)} hint="From sponsors and maintainers" />
-        <Stat label="Spent on builds" value={money(s.buildSpendCents)} hint="Metered per token, per build" />
+        <Stat accent label="Spent today" value={money(s.todayCents)} hint={`${money(leftToday)} of today's ${money(s.dailyBudgetCents)} left`} />
+        <Stat label="This month" value={money(s.monthCents)} hint="Since the 1st, UTC" />
+        <Stat label="All time" value={money(s.allTimeCents)} hint="Every build and screening since day zero" />
+        <Stat label="Spent on builds" value={money(s.buildCents)} hint="Builder, review, metered per token" />
         <Stat label="Spent on screening" value={money(s.screeningCents)} hint="Claude checking new ideas" />
-        <Stat
-          label="Adjustments"
-          value={s.adjustmentsCents === 0 ? money(0) : signedMoney(s.adjustmentsCents)}
-          hint={
-            <>
-              Corrections, each with a reason on{" "}
-              <Link to="/transparency" className="link">
-                /transparency
-              </Link>
-            </>
-          }
-        />
         <div className="sm:col-span-2 lg:col-span-1">
           <SponsorCard url={sponsorUrl} compact />
         </div>
@@ -103,33 +92,6 @@ export default function Fund({ loaderData }: Route.ComponentProps) {
             )}
           </div>
 
-          <div>
-            <h2 className="font-display text-xl font-black tracking-tight">Contributions</h2>
-            {contributions.length === 0 ? (
-              <p className="mt-4 text-ink-2">
-                None recorded yet.{" "}
-                <a href={sponsorUrl} target="_blank" rel="noopener" className="link">
-                  Be the first sponsor
-                </a>
-                .
-              </p>
-            ) : (
-              <ol className="card mt-4 divide-y divide-line">
-                {contributions.map((c) => (
-                  <li key={c.id} className="flex items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
-                    <div className="min-w-0">
-                      <p className="font-semibold [overflow-wrap:anywhere]">{c.source ?? "Anonymous"}</p>
-                      <p className="mt-0.5 text-xs text-ink-3">
-                        {day(c.createdAt)}
-                        {c.note ? ` · ${c.note}` : ""}
-                      </p>
-                    </div>
-                    <span className="num shrink-0 font-semibold text-ok">+{money(c.cents)}</span>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
         </div>
 
         <aside className="card self-start p-6 text-sm leading-relaxed text-ink-2">
@@ -139,19 +101,22 @@ export default function Fund({ loaderData }: Route.ComponentProps) {
               <strong className="text-ink">Nobody pays to vote.</strong> Votes are free and sponsorship can't buy them.
             </li>
             <li>
-              Every build is capped at <strong className="text-ink">{money(capUsd * 100)}</strong> and skipped if the fund
-              is below <strong className="text-ink">{money(minUsd * 100)}</strong>. A skipped idea stays on the board.
+              oojam spends at most <strong className="text-ink">{money(dailyUsd * 100)}</strong> on Claude per UTC day.
+              The 00:00 build gets almost all of it; a little is kept back for screening new ideas.
             </li>
-            <li>Only what a build actually uses is taken from the fund; the rest rolls over to tomorrow.</li>
-            <li>Screening each new idea costs a few cents, also paid from the fund.</li>
+            <li>
+              If less than <strong className="text-ink">{money(minUsd * 100)}</strong> is free for building, the day is
+              skipped and the top idea waits for tomorrow.
+            </li>
+            <li>Spend is metered per token as Claude works, and a build is cut off the moment it hits its budget.</li>
+            <li>
+              Sponsoring pays the Anthropic bill that makes this possible.{" "}
+              <a href={sponsorUrl} target="_blank" rel="noopener" className="link">
+                Sponsor oojam
+              </a>
+              .
+            </li>
           </ul>
-          <p className="mt-4">
-            Contributions and adjustments are recorded by admins and also appear on the{" "}
-            <Link to="/transparency" className="link">
-              transparency log
-            </Link>
-            .
-          </p>
         </aside>
       </section>
     </>

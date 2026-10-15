@@ -51,7 +51,8 @@ export const config = {
   get maxPostAttemptsPerDay() { return num("MAX_POST_ATTEMPTS_PER_DAY", 3); },
   /** Where "Sponsor oojam" points. Sponsorship funds builds; it never buys votes. */
   get sponsorUrl() { return str("SPONSOR_URL", "https://github.com/sponsors/oojam-dev"); },
-  get buildBudgetCapUsd() { return num("BUILD_BUDGET_CAP_USD", 10); },
+  /** The most oojam spends on Claude per UTC day: the build, its review and idea screening. */
+  get dailyBudgetUsd() { return num("DAILY_BUDGET_USD", 10); },
   get buildBudgetMinUsd() { return num("BUILD_BUDGET_MIN_USD", 3); },
   get buildModel() { return str("BUILD_MODEL", "claude-opus-5-5"); },
   get buildEffort() { return str("BUILD_EFFORT", "high"); },

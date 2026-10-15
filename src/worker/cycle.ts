@@ -10,7 +10,7 @@ import { eq, sql } from "drizzle-orm";
 import { config } from "../core/config.js";
 import { audit, getPaused } from "../core/controls.js";
 import { topOpenIdea } from "../core/ideas.js";
-import { chargeBuild, fundBalance } from "../core/fund.js";
+import { budgetLeftTodayCents, chargeBuild } from "../core/spend.js";
 import { usdToCents } from "../core/pricing.js";
 import { screenIdea } from "../core/screen.js";
 import { utcDay } from "../core/time.js";
@@ -34,6 +34,7 @@ import { revertOnMain } from "./revert.js";
 type Build = typeof builds.$inferSelect;
 const MAX_ATTEMPTS = 2;
 const MAX_PREBUILD_REJECTIONS = 3;
+const SCREENING_RESERVE_CENTS = 50;
 
 export async function appendLog(db: Database, buildId: number, step: string, message: string): Promise<void> {
   const entry = { at: new Date().toISOString(), step, message: message.slice(0, 4000) };
@@ -115,10 +116,10 @@ export async function runCycle(db: Database, day = utcDay()): Promise<Build | un
 async function stepFreeze(db: Database, b: Build): Promise<Build> {
   const idea = await topOpenIdea(db, b.skippedIdeaIds);
   if (!idea) return finish(db, b, "skipped", null, "No ideas on the board today.");
-  const fund = await fundBalance(db);
-  const budgetCents = Math.min(fund, Math.round(config.buildBudgetCapUsd * 100));
+  // Leave a little of the day's budget for screening ideas posted later today.
+  const budgetCents = (await budgetLeftTodayCents(db)) - SCREENING_RESERVE_CENTS;
   if (budgetCents < config.buildBudgetMinUsd * 100) {
-    return finish(db, b, "skipped", null, `The build fund ($${(fund / 100).toFixed(2)}) is below the $${config.buildBudgetMinUsd} minimum for a build. Sponsor oojam to fund the next one: ${config.sponsorUrl}`);
+    return finish(db, b, "skipped", null, `Only $${(budgetCents / 100).toFixed(2)} of today's $${config.dailyBudgetUsd} budget is free for building, under the $${config.buildBudgetMinUsd} a build needs. The idea stays at the top for tomorrow.`);
   }
   await db.update(ideas).set({ status: "frozen", frozenAt: new Date() }).where(eq(ideas.id, idea.id));
   await audit(db, null, "freeze", `idea:${idea.id}`, { day: b.day, votes: idea.voteCount });

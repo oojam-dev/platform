@@ -4,7 +4,6 @@ import { Form, data, useNavigation } from "react-router";
 import { banUser, requestWorker, unbanUser } from "../../src/core/admin.js";
 import { getPaused, setPaused } from "../../src/core/controls.js";
 import { RuleError } from "../../src/core/errors.js";
-import { adjustFund, recordContribution } from "../../src/core/fund.js";
 import { viralStats, type ViralStats } from "../../src/core/referrals.js";
 import { getDb } from "../../src/db/client.js";
 import { CsrfInput, Notice, PageTitle, StatusChip } from "../components/ui";
@@ -81,19 +80,6 @@ export async function action({ request }: Route.ActionArgs) {
         const u = await target();
         await unbanUser(db, user.id, u.id, reason);
         return ok(`@${u.githubLogin} is unbanned.`);
-      }
-      case "contribution": {
-        const cents = dollarsToCents(form.get("dollars"));
-        if (cents === null || cents <= 0) return fail("Enter a positive dollar amount, e.g. 50 or 12.50.");
-        const source = String(form.get("source") ?? "");
-        await recordContribution(db, user.id, cents, source, String(form.get("note") ?? ""));
-        return ok(`Recorded ${money(cents)} from ${source.trim()}.`);
-      }
-      case "adjust_fund": {
-        const cents = dollarsToCents(form.get("dollars"));
-        if (cents === null || cents === 0) return fail("Enter a non-zero dollar amount, e.g. 5 or -2.50.");
-        await adjustFund(db, user.id, cents, reason);
-        return ok(`Adjusted the fund by ${signedMoney(cents)}.`);
       }
       default:
         return fail("Unknown action.");
@@ -210,43 +196,6 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
           </Form>
         </Panel>
 
-        <Panel
-          title="Record a contribution"
-          description="Money that went into oojam's Anthropic account: sponsors, maintainers. Shown publicly on /fund."
-        >
-          <Form method="post" className="space-y-3" key={`contribution-${actionKey}`}>
-            <CsrfInput />
-            <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
-              <Field label="Source (public)">
-                <input name="source" required className="field" placeholder="GitHub Sponsors, October" autoComplete="off" />
-              </Field>
-              <Field label="Dollars">
-                <input name="dollars" required inputMode="decimal" className="field num" placeholder="50.00" pattern="[0-9]+(\.[0-9]{1,2})?" />
-              </Field>
-            </div>
-            <Field label="Note (optional, public)">
-              <input name="note" className="field" placeholder="Thanks, @octocat!" />
-            </Field>
-            <Submit intent="contribution" primary>
-              Record contribution
-            </Submit>
-          </Form>
-        </Panel>
-
-        <Panel title="Adjust the fund" description="Corrections either way, e.g. an Anthropic invoice that differs from the metered cost.">
-          <Form method="post" className="space-y-3" key={`adjust-${actionKey}`}>
-            <CsrfInput />
-            <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
-              <Field label="Dollars (±)">
-                <input name="dollars" required inputMode="decimal" className="field num" placeholder="-2.50" pattern="-?[0-9]+(\.[0-9]{1,2})?" />
-              </Field>
-              <Field label="Reason (public)">
-                <input name="reason" required className="field" placeholder="October invoice reconciliation" />
-              </Field>
-            </div>
-            <Submit intent="adjust_fund">Adjust fund</Submit>
-          </Form>
-        </Panel>
       </div>
 
       <Growth stats={growth} />

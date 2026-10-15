@@ -3,43 +3,40 @@ import { desc, eq, sql } from "drizzle-orm";
 
 import type { DbOrTx } from "../db/client.js";
 import { auditLog, builds, fundEntries, ideas, users } from "../db/schema.js";
+import { dailyBudgetCents } from "./spend.js";
 
-export interface FundSummary {
-  balanceCents: number;
-  contributedCents: number;
-  buildSpendCents: number;
+export interface CostSummary {
+  dailyBudgetCents: number;
+  todayCents: number;
+  monthCents: number;
+  allTimeCents: number;
+  buildCents: number;
   screeningCents: number;
-  adjustmentsCents: number;
 }
 
-export async function fundSummary(db: DbOrTx): Promise<FundSummary> {
-  const sum = (kind: string) => sql<number>`coalesce(sum(${fundEntries.deltaCents}) filter (where ${fundEntries.kind} = ${kind}), 0)::int`;
-  const [f] = await db
+/** Spend today, this month and all time (positive cents). */
+export async function costSummary(db: DbOrTx, now = new Date()): Promise<CostSummary> {
+  const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const spent = (extra = sql`true`) => sql<number>`coalesce(-sum(${fundEntries.deltaCents}) filter (where ${extra}), 0)::int`;
+  const [r] = await db
     .select({
-      balance: sql<number>`coalesce(sum(${fundEntries.deltaCents}), 0)::int`,
-      contributed: sum("contribution"),
-      spend: sum("build_spend"),
-      screening: sum("screening"),
-      adjustments: sum("adjustment"),
+      today: spent(sql`${fundEntries.createdAt} >= ${day}`),
+      month: spent(sql`${fundEntries.createdAt} >= ${month}`),
+      all: spent(),
+      build: spent(sql`${fundEntries.kind} = 'build_spend'`),
+      screening: spent(sql`${fundEntries.kind} = 'screening'`),
     })
-    .from(fundEntries);
-  return {
-    balanceCents: f?.balance ?? 0,
-    contributedCents: f?.contributed ?? 0,
-    buildSpendCents: -(f?.spend ?? 0),
-    screeningCents: -(f?.screening ?? 0),
-    adjustmentsCents: f?.adjustments ?? 0,
-  };
-}
-
-/** Recent contributions, newest first (public). */
-export async function listContributions(db: DbOrTx, limit = 50) {
-  return db
-    .select({ id: fundEntries.id, cents: fundEntries.deltaCents, source: fundEntries.source, note: fundEntries.note, createdAt: fundEntries.createdAt })
     .from(fundEntries)
-    .where(eq(fundEntries.kind, "contribution"))
-    .orderBy(desc(fundEntries.createdAt))
-    .limit(limit);
+    .where(sql`${fundEntries.kind} in ('build_spend', 'screening', 'adjustment')`);
+  return {
+    dailyBudgetCents: dailyBudgetCents(),
+    todayCents: r?.today ?? 0,
+    monthCents: r?.month ?? 0,
+    allTimeCents: r?.all ?? 0,
+    buildCents: r?.build ?? 0,
+    screeningCents: r?.screening ?? 0,
+  };
 }
 
 export async function listBuilds(db: DbOrTx, limit = 60) {

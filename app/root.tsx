@@ -13,7 +13,7 @@ import {
 
 import { config } from "../src/core/config.js";
 import { getPaused } from "../src/core/controls.js";
-import { fundBalance } from "../src/core/fund.js";
+import { budgetLeftTodayCents, dailyBudgetCents } from "../src/core/spend.js";
 import { nextFreeze } from "../src/core/time.js";
 import { getDb } from "../src/db/client.js";
 import type { Route } from "./+types/root";
@@ -37,7 +37,7 @@ export const meta: Route.MetaFunction = () => [
 export async function loader({ request }: Route.LoaderArgs) {
   const db = getDb();
   const user = await optionalUser(request);
-  const [fundCents, paused] = await Promise.all([fundBalance(db), getPaused(db)]);
+  const [leftTodayCents, paused] = await Promise.all([budgetLeftTodayCents(db), getPaused(db)]);
   return {
     user: user
       ? {
@@ -51,7 +51,9 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
       : null,
     csrf: csrfToken(user),
-    fundCents,
+    spentTodayCents: dailyBudgetCents() - leftTodayCents,
+    dailyBudgetCents: dailyBudgetCents(),
+    siteUrl: config.siteUrl.replace(/\/$/, ""),
     nextFreezeAt: nextFreeze().toISOString(),
     serverNow: Date.now(),
     paused,
@@ -59,7 +61,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     platformUrl: config.platformUrl.replace(/\/$/, ""),
     rules: {
       maxIdeasPerDay: config.maxIdeasPerDay,
-      budgetCapUsd: config.buildBudgetCapUsd,
+      dailyBudgetUsd: config.dailyBudgetUsd,
       budgetMinUsd: config.buildBudgetMinUsd,
     },
   };
@@ -68,7 +70,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 const NAV = [
   { to: "/", label: "Ideas", end: true },
   { to: "/builds", label: "Builds" },
-  { to: "/fund", label: "Fund" },
+  { to: "/costs", label: "Costs" },
   { to: "/rules", label: "Rules" },
 ];
 
@@ -82,12 +84,19 @@ function Header() {
   return (
     <header className="border-b border-line">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 pt-4 pb-3 sm:px-6 sm:pt-5">
-        <Link to="/" className="group flex items-baseline gap-2 rounded-lg" aria-label="oojam build, home">
-          <Wordmark className="text-[2rem] sm:text-[2.35rem]" />
-          <span className="rounded-full border border-line-strong px-2 py-0.5 text-[0.6875rem] font-bold uppercase tracking-wider text-ink-2 group-hover:border-ink">
+        <div className="flex items-baseline gap-2">
+          {/* The wordmark goes to the site itself; the "build" pill is this app's home. */}
+          <a href={root?.siteUrl ?? "https://oojam.dev"} className="rounded-lg" aria-label="oojam.dev">
+            <Wordmark className="text-[2rem] sm:text-[2.35rem]" />
+          </a>
+          <Link
+            to="/"
+            className="rounded-full border border-line-strong px-2 py-0.5 text-[0.6875rem] font-bold uppercase tracking-wider text-ink-2 hover:border-ink"
+            aria-label="oojam build, home"
+          >
             build
-          </span>
-        </Link>
+          </Link>
+        </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
           {root && (
@@ -146,10 +155,10 @@ function Header() {
         </nav>
         {root && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.8125rem]">
-            <Link to="/fund" className="inline-flex items-center gap-1.5 hover:underline">
+            <Link to="/costs" className="inline-flex items-center gap-1.5 hover:underline" title="oojam spends at most this much on Claude per UTC day">
               <span aria-hidden="true" className="size-2 rounded-full bg-jam" />
-              <span className="num font-semibold">{money(root.fundCents)}</span>
-              <span className="text-ink-3">in the build fund</span>
+              <span className="num font-semibold">{money(root.spentTodayCents)}</span>
+              <span className="text-ink-3">of {money(root.dailyBudgetCents)} spent today</span>
             </Link>
             <Countdown target={root.nextFreezeAt} serverNow={root.serverNow} paused={root.paused.paused} />
           </div>
@@ -205,7 +214,9 @@ function Footer() {
     <footer className="mt-24 border-t border-line">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 text-sm sm:grid-cols-[1.4fr_1fr_1fr] sm:px-6">
         <div>
-          <Wordmark className="text-2xl" />
+          <a href={root?.siteUrl ?? "https://oojam.dev"} aria-label="oojam.dev">
+            <Wordmark className="text-2xl" />
+          </a>
           <p className="mt-2 max-w-xs text-ink-2">
             A website with no designated purpose. The community decides what it becomes, one vote and one day at a
             time. Just a bit of fun.

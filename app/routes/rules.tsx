@@ -15,7 +15,7 @@ export async function loader() {
     maxIdeas: config.maxIdeasPerDay,
     maxAttempts: config.maxPostAttemptsPerDay,
     sponsorUrl: config.sponsorUrl,
-    capUsd: config.buildBudgetCapUsd,
+    dailyUsd: config.dailyBudgetUsd,
     minUsd: config.buildBudgetMinUsd,
     minAccountAge: config.minGithubAccountAgeDays,
   };
@@ -33,7 +33,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
 }
 
 export default function Rules({ loaderData }: Route.ComponentProps) {
-  const { rules, maxIdeas, maxAttempts, sponsorUrl, capUsd, minUsd, minAccountAge } = loaderData;
+  const { rules, maxIdeas, maxAttempts, sponsorUrl, dailyUsd, minUsd, minAccountAge } = loaderData;
   const oneIdea = maxIdeas === 1 ? "one idea" : `${maxIdeas} ideas`;
   const toc = [
     ["voting", "Ideas & voting"],
@@ -94,24 +94,27 @@ export default function Rules({ loaderData }: Route.ComponentProps) {
               It's just a bit of fun.
             </li>
             <li>
-              The only real cost is Claude doing the building. That's paid from the{" "}
-              <Link to="/fund" className="link">
-                build fund
-              </Link>
-              : Anthropic credits donated by{" "}
+              The only real cost is Claude: screening ideas, building the winner and reviewing it. oojam spends at
+              most <strong>{money(dailyUsd * 100)} a day</strong> on that, paid by the maintainers and{" "}
               <a href={sponsorUrl} target="_blank" rel="noopener" className="link">
                 sponsors
-              </a>{" "}
-              and the maintainers.
+              </a>
+              .
             </li>
             <li>
               <strong>Sponsorship only funds builds. It never buys votes</strong>, ranking, or a say in what gets built.
             </li>
             <li>
-              Each build is capped at {money(capUsd * 100)}. If the fund is below {money(minUsd * 100)}, the day is skipped
-              and the idea stays on the board.
+              The 00:00 build gets nearly all of the day's budget. If less than {money(minUsd * 100)} is free, the day is
+              skipped and the idea stays on the board.
             </li>
-            <li>Every contribution and every build's cost is public on /fund.</li>
+            <li>
+              What every build and screening cost is public on{" "}
+              <Link to="/costs" className="link">
+                /costs
+              </Link>
+              .
+            </li>
           </ul>
         </Section>
 
@@ -124,7 +127,7 @@ export default function Rules({ loaderData }: Route.ComponentProps) {
             <li>
               <strong>{oneIdea === "one idea" ? "One idea a day" : `${maxIdeas} ideas a day`}</strong> (and {maxAttempts}{" "}
               attempts, counting ideas screening rejects) keeps the board readable and the screening bill small —
-              screening is paid from the build fund.
+              screening comes out of the daily budget.
             </li>
             <li>
               <strong>GitHub accounts must be at least {minAccountAge} days old.</strong> Votes are free, so the only thing
@@ -203,9 +206,9 @@ export default function Rules({ loaderData }: Route.ComponentProps) {
             <Link to="/transparency" className="link">
               /transparency
             </Link>
-            , and every dollar on{" "}
-            <Link to="/fund" className="link">
-              /fund
+            , and every dollar spent on{" "}
+            <Link to="/costs" className="link">
+              /costs
             </Link>
             .
           </p>
