@@ -279,6 +279,28 @@ describe("git on a builder's work tree", () => {
     expect(blocks(checkPaths(changes)).map((f) => f.file)).toEqual([".gitattributes"]);
   });
 
+  it("commits only what git would: ignored and generated files stay out", async () => {
+    const { repo, base } = await setup();
+    writeFileSync(join(repo.workTree, ".gitignore"), "secret.txt\n");
+    await commitWorkTree(repo, "ignore file");
+    const base2 = (await git(repo, ["rev-parse", "HEAD"])).trim();
+    mkdirSync(join(repo.workTree, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(repo.workTree, "node_modules", "x.js"), "process.env.EVIL");
+    symlinkSync("../x.js", join(repo.workTree, "node_modules", ".bin", "x"));
+    mkdirSync(join(repo.workTree, "build", "client"), { recursive: true });
+    writeFileSync(join(repo.workTree, "build", "client", "a.js"), "x");
+    mkdirSync(join(repo.workTree, "app", "nested", "node_modules"), { recursive: true });
+    writeFileSync(join(repo.workTree, "app", "nested", "node_modules", "y.js"), "y");
+    writeFileSync(join(repo.workTree, "secret.txt"), "shh");
+    writeFileSync(join(repo.workTree, "app", "real.ts"), "export const real = 1;\n");
+    // Even if a build un-ignores things, generated folders stay out.
+    writeFileSync(join(repo.workTree, ".gitignore"), "");
+    const head = (await commitWorkTree(repo, "build"))!;
+    const files = (await readChanges(repo, base2, head)).files.map((f) => f.path).sort();
+    expect(files).toEqual([".gitignore", "app/real.ts", "secret.txt"]);
+    void base;
+  });
+
   it("reports an empty build", async () => {
     const { repo, base } = await setup();
     expect(await commitWorkTree(repo, "nothing")).toBeUndefined();

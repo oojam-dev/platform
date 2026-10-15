@@ -62,9 +62,14 @@ export function git(repo: Repo, args: string[], opts: { input?: string; env?: Re
   });
 }
 
+const GENERATED = ["node_modules", "build", ".react-router", ".cache", "coverage"];
+
 /** Stages everything the builder did and commits it. Returns the new HEAD, or undefined if nothing changed. */
 export async function commitWorkTree(repo: Repo, message: string): Promise<string | undefined> {
-  await git(repo, ["add", "--all", "--force", "--", "."]);
+  // Respect .gitignore (never --force), and always leave out installed and generated files
+  // even if a build edited .gitignore. Only committed files are gated, built and deployed,
+  // so anything left out here simply never ships.
+  await git(repo, ["add", "--all", "--", ".", ...GENERATED.map((p) => `:(exclude,glob)**/${p}/**`)]);
   const staged = await git(repo, ["diff", "--cached", "--name-only"]);
   if (!staged.trim()) return undefined;
   await git(repo, ["commit", "--no-verify", "--quiet", "-F", "-"], { input: message });
