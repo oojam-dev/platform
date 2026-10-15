@@ -55,6 +55,14 @@ describe.skipIf(!hasDb)("votes, referrals and spend (postgres)", () => {
     await expect(postIdea(db, u.id, { title: "A better idea today", body: "" })).resolves.toBeTruthy();
   });
 
+  it("a withdrawn idea frees the day's slot, but still counts as an attempt", async () => {
+    const u = await makeUser(db);
+    const first = await postIdea(db, u.id, { title: "Changed my mind idea", body: "" });
+    await db.update(ideas).set({ status: "withdrawn" }).where(eq(ideas.id, first.id));
+    expect(await postsToday(db, u.id)).toEqual({ attempts: 1, posts: 0 });
+    await expect(postIdea(db, u.id, { title: "The idea I really want", body: "" })).resolves.toBeTruthy();
+  });
+
   it("caps attempts so rejected posts can't run up the screening bill", async () => {
     const u = await makeUser(db);
     for (let i = 0; i < 3; i++) {

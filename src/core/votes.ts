@@ -38,12 +38,15 @@ export function validateIdea(title: string, body: string): { title: string; body
 /** An idea rejected at screening doesn't count towards the daily post limit. */
 const rejectedAtScreening = sql`(${ideas.screenVerdict} ->> 'allowed')::boolean is false`;
 
-/** Ideas posted today: attempts (everything) and posts (excluding screening rejections). */
+/**
+ * Ideas posted today: attempts (everything, so nobody can cycle through ideas) and posts (not
+ * counting screening rejections or ideas the author withdrew, which free the day's slot).
+ */
 export async function postsToday(db: DbOrTx, userId: number, now = new Date()): Promise<{ attempts: number; posts: number }> {
   const [row] = await db
     .select({
       attempts: sql<number>`count(*)::int`,
-      posts: sql<number>`(count(*) filter (where not coalesce(${rejectedAtScreening}, false)))::int`,
+      posts: sql<number>`(count(*) filter (where not coalesce(${rejectedAtScreening}, false) and ${ideas.status} <> 'withdrawn'))::int`,
     })
     .from(ideas)
     .where(and(eq(ideas.authorId, userId), gte(ideas.createdAt, startOfUtcDay(now))));
