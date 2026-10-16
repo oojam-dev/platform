@@ -154,6 +154,20 @@ export interface BuildLogEntry {
   message: string;
 }
 
+/** The latest progress note of the attempt in progress (SPEC §4.5); replaced, never appended. */
+export interface BuildProgress {
+  attempt: number;
+  /** When this attempt's container started. */
+  startedAt: string;
+  updatedAt: string;
+  /** The builder's latest sentence, trimmed and with secrets redacted. */
+  note: string;
+  toolCalls: number;
+  /** What the gateway has metered for this attempt so far; null if it couldn't be read. */
+  spentUsd: number | null;
+  budgetUsd: number;
+}
+
 export const builds = pgTable(
   "builds",
   {
@@ -178,6 +192,7 @@ export const builds = pgTable(
     summary: text("summary"),
     error: text("error"),
     log: jsonb("log").$type<BuildLogEntry[]>().notNull().default([]),
+    progress: jsonb("progress").$type<BuildProgress>(),
     startedAt: ts("started_at"),
     finishedAt: ts("finished_at"),
     createdAt: createdAt(),

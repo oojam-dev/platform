@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { config } from "../core/config.js";
 import { audit, getPaused } from "../core/controls.js";
@@ -15,7 +15,7 @@ import { usdToCents } from "../core/pricing.js";
 import { screenIdea } from "../core/screen.js";
 import { utcDay } from "../core/time.js";
 import type { Database } from "../db/client.js";
-import { builds, ideas, users, type BuildStatus } from "../db/schema.js";
+import { builds, ideas, users, type BuildProgress, type BuildStatus } from "../db/schema.js";
 import { commitWorkTree } from "../guardrails/git.js";
 import { newBuildToken, registerToken, revokeToken, runAttempt } from "./builder-run.js";
 import { DeployError, deploySite } from "./deployer.js";
@@ -73,6 +73,14 @@ export async function appendLog(db: Database, buildId: number, step: string, mes
     .where(eq(builds.id, buildId));
 }
 
+/** Replaces the live progress note, only while the attempt it belongs to is still running. */
+async function saveProgress(db: Database, buildId: number, progress: BuildProgress): Promise<void> {
+  await db
+    .update(builds)
+    .set({ progress })
+    .where(and(eq(builds.id, buildId), eq(builds.status, "building"), eq(builds.attempt, progress.attempt)));
+}
+
 async function setStatus(db: Database, id: number, status: BuildStatus, extra: Partial<Build> = {}): Promise<Build> {
   const [b] = await db.update(builds).set({ status, ...extra }).where(eq(builds.id, id)).returning();
   return b!;
@@ -87,7 +95,7 @@ async function addCost(db: Database, b: Build, usd: number, what: string): Promi
 }
 
 async function finish(db: Database, b: Build, status: BuildStatus, ideaStatus: "deployed" | "failed" | "open" | null, error?: string): Promise<Build> {
-  const done = await setStatus(db, b.id, status, { finishedAt: new Date(), error: error ?? b.error, activeToken: null });
+  const done = await setStatus(db, b.id, status, { finishedAt: new Date(), error: error ?? b.error, activeToken: null, progress: null });
   if (b.ideaId && ideaStatus) {
     await db
       .update(ideas)
@@ -201,7 +209,7 @@ async function stepBuild(db: Database, b: Build): Promise<Build> {
   // A restart mid-attempt: meter what that attempt spent, then start it again cleanly.
   if (b.activeToken) {
     b = await addCost(db, b, await revokeToken(b.activeToken), `Attempt ${b.attempt} (interrupted)`);
-    b = await setStatus(db, b.id, "building", { activeToken: null });
+    b = await setStatus(db, b.id, "building", { activeToken: null, progress: null });
   }
   let dirs = buildDirs(b.id);
   let baseSha = b.baseSha;
@@ -220,10 +228,15 @@ async function stepBuild(db: Database, b: Build): Promise<Build> {
     if (attempt === 1) await resetWorkTree(dirs, baseSha!);
     const token = newBuildToken();
     await registerToken(token, budgetUsd, `build ${b.id} attempt ${attempt}`);
-    b = await setStatus(db, b.id, "building", { attempt, activeToken: token });
+    b = await setStatus(db, b.id, "building", { attempt, activeToken: token, progress: null });
     await appendLog(db, b.id, "build", `Attempt ${attempt}: the builder is working (budget $${budgetUsd.toFixed(2)}, model ${config.buildModel}).`);
-    const result = await runAttempt(dirs, { buildId: b.id, attempt, budgetUsd, idea: { id: task.idea.id, title: task.idea.title, body: task.idea.body, author: task.author.login }, feedback }, token);
-    b = await setStatus(db, b.id, "gating", { activeToken: null, summary: result.summary || b.summary });
+    const result = await runAttempt(
+      dirs,
+      { buildId: b.id, attempt, budgetUsd, idea: { id: task.idea.id, title: task.idea.title, body: task.idea.body, author: task.author.login }, feedback },
+      token,
+      (p) => saveProgress(db, b.id, p),
+    );
+    b = await setStatus(db, b.id, "gating", { activeToken: null, progress: null, summary: result.summary || b.summary });
     b = await addCost(db, b, result.costUsd, `Builder attempt ${attempt}`);
     await appendLog(db, b.id, "build", `Attempt ${attempt} ${result.status}; $${result.costUsd.toFixed(2)} spent.${result.error ? ` ${result.error}` : ""}`);
     if (result.status === "gave_up") {
