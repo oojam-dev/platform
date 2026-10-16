@@ -21,6 +21,7 @@ import { newBuildToken, registerToken, revokeToken, runAttempt } from "./builder
 import { DeployError, deploySite } from "./deployer.js";
 import { runGate } from "./gate.js";
 import {
+  branchHead,
   closePullRequest,
   coAuthorTrailer,
   commentOnPullRequest,
@@ -327,8 +328,11 @@ async function stepMerge(db: Database, b: Build): Promise<Build> {
   const pr = await gh<{ head: { sha: string }; merged: boolean; merge_commit_sha: string | null; state: string }>("GET", `/repos/${config.siteRepo}/pulls/${b.prNumber}`);
   if (pr.merged && pr.merge_commit_sha) return setStatus(db, b.id, "deploying", { mergeSha: pr.merge_commit_sha });
   if (pr.state !== "open") return finish(db, b, "failed", outcome, "The PR was closed before it could be merged.");
-  await appendLog(db, b.id, "ci", "Waiting for CI");
-  const checks = await waitForChecks(pr.head.sha, 45 * 60_000);
+  // Wait on the branch's real head: we push twice (the build, then the changelog), CI cancels the
+  // first run, and the PR's head can still show the first commit for a moment after the second push.
+  const headSha = await branchHead(b.branch!);
+  await appendLog(db, b.id, "ci", `Waiting for CI on ${headSha.slice(0, 12)}`);
+  const checks = await waitForChecks(headSha, 45 * 60_000);
   if (checks.failures.length) {
     await commentOnPullRequest(b.prNumber!, `CI failed, so this build won't be merged:\n${checks.failures.map((f) => `- ${f}`).join("\n")}`).catch(() => {});
     await closePullRequest(b.prNumber!).catch(() => {});
@@ -342,7 +346,7 @@ async function stepMerge(db: Database, b: Build): Promise<Build> {
   const message = task.housekeeping
     ? `Housekeeping on ${b.day}. ${config.platformUrl}/builds/${b.id}`
     : `Idea #${task.idea.id}, built on ${b.day}. ${config.platformUrl}/builds/${b.id}\n\n${coAuthorTrailer(task.author.githubId!, task.author.login)}`;
-  const mergeSha = await squashMerge(b.prNumber!, pr.head.sha, `${prTitle(task, b.summary)} (#${b.prNumber})`, message);
+  const mergeSha = await squashMerge(b.prNumber!, headSha, `${prTitle(task, b.summary)} (#${b.prNumber})`, message);
   await appendLog(db, b.id, "merge", `Merged as ${mergeSha.slice(0, 12)}`);
   return setStatus(db, b.id, "deploying", { mergeSha });
 }

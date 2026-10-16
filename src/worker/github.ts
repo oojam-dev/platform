@@ -109,6 +109,12 @@ export async function waitForChecks(sha: string, timeoutMs: number): Promise<{ d
   return { done: false, failures: ["CI did not finish in time"] };
 }
 
+/** The commit a branch points at right now (authoritative; a PR's head can lag after a push). */
+export async function branchHead(branch: string): Promise<string> {
+  const r = await gh<{ commit: { sha: string } }>("GET", `/repos/${config.siteRepo}/branches/${branch.split("/").map(encodeURIComponent).join("/")}`);
+  return r.commit.sha;
+}
+
 export async function squashMerge(number: number, headSha: string, title: string, message: string): Promise<string> {
   const r = await gh<{ sha: string; merged: boolean }>("PUT", `/repos/${config.siteRepo}/pulls/${number}/merge`, {
     merge_method: "squash",
